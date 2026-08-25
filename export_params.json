@@ -1,0 +1,35 @@
+{
+  "inputs": {
+    "CRS": "EPSG:31982",
+    "ENCODING": 18,
+    "EXTENT": "720234.495000000,720472.095000000,8192330.572000000,8192498.572000000 [EPSG:31982]",
+    "FORCE_2D": true,
+    "EXPORT_LINES_WITH_ZERO_WIDTH": false,
+    "LAYERS": [
+      {
+        "layer": "v_edit_arc_54b78599_6794_4b48_aa73_deda35d35771",
+        "attributeIndex": 19
+      },
+      {
+        "layer": "v_edit_node_cb9a467c_5e78_4c1f_8c11_ea1081d05975",
+        "attributeIndex": -1
+      },
+      {
+        "layer": "2_lote_7230f18b_bac6_460f_a7f4_9a0fbe68468f",
+        "attributeIndex": -1
+      },
+      {
+        "layer": "3_quadra_65dc2bd0_5c64_4403_92d3_bf0672e76a1b",
+        "attributeIndex": -1
+      }
+    ],
+    "MAP_THEME": "",
+    "MTEXT": true,
+    "OUTPUT": "/Volumes/Mac_Dados/Downloads/sicob_headless_test2.dxf",
+    "SELECTED_FEATURES_ONLY": false,
+    "SYMBOLOGY_MODE": 2,
+    "SYMBOLOGY_SCALE": 800,
+    "USE_LAYER_TITLE": false
+  },
+  "project_path": "/Volumes/Mac_Dados/Downloads/QGIS_AGUA_OFF - Copia/agua_aps_off_05-04-26.qgs"
+}
