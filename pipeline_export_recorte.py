@@ -105,8 +105,8 @@ def run_pipeline(
       "inputs": {
         "CRS": "EPSG:31982",
         "ENCODING": "cp1252",
-        "FORCE_2D": true,
-        "EXPORT_LINES_WITH_ZERO_WIDTH": true,
+        "FORCE_2D": True,
+        "EXPORT_LINES_WITH_ZERO_WIDTH": True,
         "LAYERS": [
           {"layer": "3_quadra_65dc2bd0_5c64_4403_92d3_bf0672e76a1b", "attributeIndex": -1},
           {"layer": "2_lote_7230f18b_bac6_460f_a7f4_9a0fbe68468f", "attributeIndex": -1},
@@ -117,12 +117,12 @@ def run_pipeline(
           {"layer": "v_edit_node_cb9a467c_5e78_4c1f_8c11_ea1081d05975", "attributeIndex": -1},
           {"layer": "logradouro_ba224c23_ea9a_461c_81ff_5f94045a5715", "attributeIndex": -1}
         ],
-        "MTEXT": true,
+        "MTEXT": True,
         "OUTPUT": raw_dxf,
-        "SELECTED_FEATURES_ONLY": false,
+        "SELECTED_FEATURES_ONLY": False,
         "SYMBOLOGY_MODE": 2,
         "SYMBOLOGY_SCALE": 800,
-        "USE_LAYER_TITLE": false
+        "USE_LAYER_TITLE": False
       },
       "project_path": temp_qgs
     }
