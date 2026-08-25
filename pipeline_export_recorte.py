@@ -7,13 +7,13 @@ import xml.etree.ElementTree as ET
 QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_process"
 
 LAYER_CONFIG = {
-    'Rede_Lote': {'aci': 72, 'lw': 20},
-    'Rede_Quadra': {'aci': 32, 'lw': 30},
-    'Rede_Meio_Fio': {'aci': 221, 'lw': 25},
+    'Rede_Lote': {'aci': 70, 'lw': 20, 'truecolor': 6723840},             # RGB (102, 153, 0)
+    'Rede_Quadra': {'aci': 94, 'lw': 25, 'truecolor': 3368499},           # RGB (51, 102, 51)
+    'Rede_Meio_Fio': {'aci': 214, 'lw': 25, 'truecolor': 10053273},       # RGB (153, 102, 153)
     'Logradouro': {'aci': 8, 'lw': 18},
-    'Curva_Nivel_Mestra': {'aci': 30, 'lw': 35},
-    'Curva_Nivel_Intermediaria': {'aci': 64, 'lw': 15},
-    'Nos': {'aci': 7, 'lw': 25},
+    'Curva_Nivel_Mestra': {'aci': 14, 'lw': 35, 'truecolor': 6684672},     # RGB (102, 0, 0)
+    'Curva_Nivel_Intermediaria': {'aci': 34, 'lw': 15, 'truecolor': 10053120}, # RGB (153, 102, 0)
+    'Nos': {'aci': 4, 'lw': 25},
     'Rede_DN50': {'aci': 4, 'lw': 40},
     'Rede_DN75': {'aci': 3, 'lw': 40},
     'Rede_DN100': {'aci': 1, 'lw': 50},
@@ -184,6 +184,10 @@ def run_pipeline(
                         continue
                     if k == '62' and curr_layer_name in LAYER_CONFIG:
                         header_tables_blocks.append((k, f"{LAYER_CONFIG[curr_layer_name]['aci']:>8}"))
+                        if 'truecolor' in LAYER_CONFIG[curr_layer_name]:
+                            header_tables_blocks.append(('420', f"{LAYER_CONFIG[curr_layer_name]['truecolor']:>8}"))
+                        if 'lw' in LAYER_CONFIG[curr_layer_name]:
+                            header_tables_blocks.append(('370', f"{LAYER_CONFIG[curr_layer_name]['lw']:>8}"))
                         i += 1
                         continue
 

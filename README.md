@@ -53,19 +53,19 @@ python3 /Volumes/Mac_Dados/Repos/MJ-PROJETOQGIS/pipeline_export_recorte.py
 
 ## 📐 Tabela de Layers e Penas Configuradas
 
-| Layer | Cor AutoCAD (ACI) | Espessura (Lineweight) | Descrição |
+| Layer | Cor AutoCAD (ACI / TrueColor) | Espessura (Lineweight) | Descrição |
 |---|---|---|---|
-| `Rede_Lote` | 72 (Verde Claro) | 0.20 mm | Lotes cadastrais e hachuras |
-| `Rede_Quadra` | 32 (Marrom/Laranja) | 0.30 mm | Perímetros e hachuras de quadra |
-| `Rede_Meio_Fio` | 221 (Cinza/Azulado) | 0.25 mm | Meio-fio e calçadas |
-| `Logradouro` | 8 (Cinza Escuro) | 0.18 mm | Textos de vias e eixos |
-| `Curva_Nivel_Mestra` | 30 (Laranja) | 0.35 mm | Curvas mestras (cotas principais) |
-| `Curva_Nivel_Intermediaria` | 64 (Verde Escuro) | 0.15 mm | Curvas intermediárias |
-| `Nos` | 7 (Branco/Preto) | 0.25 mm | Nós e conexões da rede |
-| `Rede_DN50` | 4 (Ciano) | 0.40 mm | Rede de água DN 50 |
-| `Rede_DN75` | 3 (Verde) | 0.40 mm | Rede de água DN 75 |
-| `Rede_DN100` | 1 (Vermelho) | 0.50 mm | Rede de água DN 100 |
-| `Rede_DN150` | 5 (Azul) | 0.50 mm | Rede de água DN 150 |
-| `Rede_DN200` | 6 (Magenta) | 0.50 mm | Rede de água DN 200 |
-| `Rede_DN250` | 14 (Laranja Vivo) | 0.60 mm | Rede de água DN 250 |
-| `Rede_DN300` | 5 (Azul) | 0.60 mm | Rede de água DN 300 |
+| `Rede_Lote` | ACI 70 / RGB 102,153,0 | 0.20 mm | Lotes cadastrais e hachuras |
+| `Rede_Quadra` | ACI 94 / RGB 51,102,51 | 0.25 mm | Perímetros e hachuras de quadra |
+| `Rede_Meio_Fio` | ACI 214 / RGB 153,102,153 | 0.25 mm | Meio-fio e calçadas |
+| `Logradouro` | ACI 8 | 0.18 mm | Textos de vias e eixos |
+| `Curva_Nivel_Mestra` | ACI 14 / RGB 102,0,0 | 0.35 mm | Curvas mestras (cotas principais) |
+| `Curva_Nivel_Intermediaria` | ACI 34 / RGB 153,102,0 | 0.15 mm | Curvas intermediárias |
+| `Nos` | ACI 4 | 0.25 mm | Nós e conexões da rede |
+| `Rede_DN50` | ACI 4 (Ciano) | 0.40 mm | Rede de água DN 50 |
+| `Rede_DN75` | ACI 3 (Verde) | 0.40 mm | Rede de água DN 75 |
+| `Rede_DN100` | ACI 1 (Vermelho) | 0.50 mm | Rede de água DN 100 |
+| `Rede_DN150` | ACI 5 (Azul) | 0.50 mm | Rede de água DN 150 |
+| `Rede_DN200` | ACI 6 (Magenta) | 0.50 mm | Rede de água DN 200 |
+| `Rede_DN250` | ACI 14 (Laranja Vivo) | 0.60 mm | Rede de água DN 250 |
+| `Rede_DN300` | ACI 5 (Azul) | 0.60 mm | Rede de água DN 300 |
