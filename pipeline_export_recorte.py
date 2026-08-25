@@ -135,63 +135,131 @@ def run_pipeline(
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     print("  ✓ Exportação DXF concluída pelo engine QGIS.")
 
-    # 4. Pós-processador para ByLayer, ACI Colors e Expurgo de Overrides
+    # 4. Pós-processador para ByLayer, ACI Colors, Geometria HATCH e Expurgo de Overrides
     with open(raw_dxf, 'r', encoding='cp1252', errors='replace') as f:
         lines = f.read().splitlines()
 
     pairs = []
     for i in range(0, len(lines)-1, 2):
-        pairs.append((lines[i], lines[i+1]))
+        pairs.append((lines[i].strip(), lines[i+1].strip()))
 
-    new_pairs = []
-    in_entities = False
+    header_tables_blocks = []
+    entities_list = []
+    objects_trailer = []
+
+    mode = 'PRE_ENTITIES'
+    curr_ent = []
+    curr_type = None
     in_layer_table = False
     curr_layer_name = None
 
     i = 0
     while i < len(pairs):
         k, v = pairs[i]
-        k_s = k.strip()
 
-        if k_s == '0' and v == 'SECTION':
-            if i+1 < len(pairs) and pairs[i+1][0].strip() == '2' and pairs[i+1][1] == 'ENTITIES':
-                in_entities = True
-        elif k_s == '0' and v == 'ENDSEC' and in_entities:
-            in_entities = False
+        if mode == 'PRE_ENTITIES':
+            if k == '0' and v == 'SECTION' and i+1 < len(pairs) and pairs[i+1][0] == '2' and pairs[i+1][1] == 'ENTITIES':
+                mode = 'ENTITIES'
+                header_tables_blocks.append((k, v))
+                header_tables_blocks.append(pairs[i+1])
+                i += 2
+                continue
+            else:
+                # Adicionar $FILLMODE 1 no fim do HEADER se necessário
+                if k == '0' and v == 'ENDSEC' and len(header_tables_blocks) > 0 and header_tables_blocks[1] == ('2', 'HEADER'):
+                    header_tables_blocks.append(('9', '$FILLMODE'))
+                    header_tables_blocks.append(('70', '1'))
 
-        if k_s == '0' and v == 'TABLE':
-            if i+1 < len(pairs) and pairs[i+1][0].strip() == '2' and pairs[i+1][1] == 'LAYER':
-                in_layer_table = True
-        elif k_s == '0' and v == 'ENDTAB' and in_layer_table:
-            in_layer_table = False
+                if k == '0' and v == 'TABLE':
+                    if i+1 < len(pairs) and pairs[i+1][0] == '2' and pairs[i+1][1] == 'LAYER':
+                        in_layer_table = True
+                elif k == '0' and v == 'ENDTAB' and in_layer_table:
+                    in_layer_table = False
 
-        # Na tabela LAYER: renomear e atribuir cor correta ACI
-        if in_layer_table:
-            if k_s == '2' and v != 'LAYER':
-                curr_layer_name = clean_layer(v)
-                new_pairs.append((k, curr_layer_name))
+                if in_layer_table:
+                    if k == '2' and v != 'LAYER':
+                        curr_layer_name = clean_layer(v)
+                        header_tables_blocks.append((k, curr_layer_name))
+                        i += 1
+                        continue
+                    if k == '62' and curr_layer_name in LAYER_CONFIG:
+                        header_tables_blocks.append((k, f"{LAYER_CONFIG[curr_layer_name]['aci']:>8}"))
+                        i += 1
+                        continue
+
+                header_tables_blocks.append((k, v))
                 i += 1
                 continue
-            if k_s == '62' and curr_layer_name in LAYER_CONFIG:
-                new_pairs.append((k, f"{LAYER_CONFIG[curr_layer_name]['aci']:>8}"))
+
+        elif mode == 'ENTITIES':
+            if k == '0' and v == 'ENDSEC':
+                if curr_ent:
+                    entities_list.append((curr_type, curr_ent))
+                    curr_ent = []
+                mode = 'POST_ENTITIES'
+                objects_trailer.append((k, v))
+                i += 1
+                continue
+            elif k == '0':
+                if curr_ent:
+                    entities_list.append((curr_type, curr_ent))
+                curr_type = v
+                curr_ent = [(k, v)]
+                i += 1
+                continue
+            else:
+                # Expurgo de overrides ByLayer
+                if k in ['62', '420', '370', '40', '41', '43']:
+                    i += 1
+                    continue
+                if k == '8':
+                    curr_ent.append((k, clean_layer(v)))
+                    i += 1
+                    continue
+
+                curr_ent.append((k, v))
                 i += 1
                 continue
 
-        # Dentro de ENTITIES: expurgar overrides e Global Width
-        if in_entities:
-            if k_s in ['62', '420', '370', '40', '41', '43']:
-                i += 1
-                continue
-            if k_s == '8':
-                new_pairs.append((k, clean_layer(v)))
-                i += 1
-                continue
+        elif mode == 'POST_ENTITIES':
+            objects_trailer.append((k, v))
+            i += 1
 
-        new_pairs.append((k, v))
-        i += 1
+    # Normalizar entidades HATCH (AutoCAD exige vetor normal Z 230: 1.0 e elevação Z 30: 0.0)
+    fixed_entities = []
+    for t, ent in entities_list:
+        if t == 'HATCH':
+            new_ent = []
+            j = 0
+            while j < len(ent):
+                gk, gv = ent[j]
+                new_ent.append((gk, gv))
+                if gk == '20' and j > 0 and ent[j-1][0] == '10' and ent[j-1][1] == '0.0':
+                    new_ent.append(('30', '0.0'))
+                elif gk == '220':
+                    new_ent.append(('230', '1.0'))
+                j += 1
+            fixed_entities.append((t, new_ent))
+        else:
+            fixed_entities.append((t, ent))
+
+    # Ordenação de desenho (Draw Order): HATCH no fundo, depois LWPOLYLINE, INSERT e TEXT
+    def sort_key(item):
+        t, ent = item
+        if t == 'HATCH': return 0
+        if t == 'LWPOLYLINE': return 1
+        if t == 'INSERT': return 2
+        return 3
+
+    fixed_entities.sort(key=sort_key)
+
+    final_pairs = list(header_tables_blocks)
+    for t, ent in fixed_entities:
+        final_pairs.extend(ent)
+    final_pairs.extend(objects_trailer)
 
     out_lines = []
-    for k, v in new_pairs:
+    for k, v in final_pairs:
         out_lines.append(k)
         out_lines.append(v)
 
