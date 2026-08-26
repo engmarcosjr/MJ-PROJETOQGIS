@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import json
 import subprocess
 import xml.etree.ElementTree as ET
@@ -7,13 +8,13 @@ import xml.etree.ElementTree as ET
 QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_process"
 
 LAYER_CONFIG = {
-    'Rede_Lote': {'aci': 70, 'lw': 20, 'truecolor': 6723840},             # RGB (102, 153, 0)
-    'Rede_Quadra': {'aci': 94, 'lw': 25, 'truecolor': 3368499},           # RGB (51, 102, 51)
-    'Rede_Meio_Fio': {'aci': 214, 'lw': 25, 'truecolor': 10053273},       # RGB (153, 102, 153)
+    'Rede_Lote': {'aci': 72, 'lw': 20},
+    'Rede_Quadra': {'aci': 32, 'lw': 25},
+    'Rede_Meio_Fio': {'aci': 221, 'lw': 25},
     'Logradouro': {'aci': 8, 'lw': 18},
-    'Curva_Nivel_Mestra': {'aci': 14, 'lw': 35, 'truecolor': 6684672},     # RGB (102, 0, 0)
-    'Curva_Nivel_Intermediaria': {'aci': 34, 'lw': 15, 'truecolor': 10053120}, # RGB (153, 102, 0)
-    'Nos': {'aci': 4, 'lw': 25},
+    'Curva_Nivel_Mestra': {'aci': 14, 'lw': 35},
+    'Curva_Nivel_Intermediaria': {'aci': 252, 'lw': 15},
+    'Nos': {'aci': 7, 'lw': 25},
     'Rede_DN50': {'aci': 4, 'lw': 40},
     'Rede_DN75': {'aci': 3, 'lw': 40},
     'Rede_DN100': {'aci': 1, 'lw': 50},
@@ -212,8 +213,12 @@ def run_pipeline(
                 i += 1
                 continue
             else:
-                # Expurgo de overrides ByLayer
-                if k in ['62', '420', '370', '40', '41', '43']:
+                # Expurgo de overrides desnecessários
+                if k in ['420', '370', '40', '41', '43']:
+                    i += 1
+                    continue
+                # Preservar ou ignorar cores diretas nas entidades comuns (mas ajustaremos nas hachuras)
+                if k == '62':
                     i += 1
                     continue
                 if k == '8':
@@ -229,21 +234,92 @@ def run_pipeline(
             objects_trailer.append((k, v))
             i += 1
 
-    # Normalizar entidades HATCH (AutoCAD exige vetor normal Z 230: 1.0 e elevação Z 30: 0.0)
+    # Normalizar entidades HATCH (Vetor normal Z 230: 1.0, elevação Z 30: 0.0) em BLOCKS e ENTITIES
+    def fix_hatch_entity(ent, lay=None):
+        new_ent = []
+        has_230 = any(gk == '230' for gk, gv in ent)
+        has_30 = any(gk == '30' for gk, gv in ent)
+        has_440 = any(gk == '440' for gk, gv in ent)
+
+        j = 0
+        while j < len(ent):
+            gk, gv = ent[j]
+            new_ent.append((gk, gv))
+            if gk == '20' and j > 0 and ent[j-1][0] == '10' and ent[j-1][1] == '0.0' and not has_30:
+                new_ent.append(('30', '0.0'))
+                has_30 = True
+            elif gk == '220' and not has_230:
+                new_ent.append(('230', '1.0'))
+                has_230 = True
+            elif gk == '100' and gv == 'AcDbEntity' and not has_440:
+                # Inserir transparência 50% no bloco AcDbEntity
+                if lay in ['Rede_Lote', 'Rede_Meio_Fio', 'Rede_Quadra']:
+                    new_ent.append(('440', ' 33554559'))
+                    has_440 = True
+            j += 1
+        return new_ent
+
+    # Normalizar HATCH dentro de header_tables_blocks
+    fixed_header_blocks = []
+    i = 0
+    while i < len(header_tables_blocks):
+        k, v = header_tables_blocks[i]
+        if k == '0' and v == 'HATCH':
+            h_ent = [(k, v)]
+            i += 1
+            while i < len(header_tables_blocks) and header_tables_blocks[i][0] != '0':
+                h_ent.append(header_tables_blocks[i])
+                i += 1
+            fixed_header_blocks.extend(fix_hatch_entity(h_ent))
+        else:
+            fixed_header_blocks.append((k, v))
+            i += 1
+
+    # Função para sanitizar textos MTEXT do QGIS (remove tags RTF/inline que travam o In-Place Editor do AutoCAD)
+    def clean_mtext_content(raw_txt):
+        # Remove tags de fonte (\fFont Name|b0|i0;)
+        txt = re.sub(r'\\f[^;]+;', '', raw_txt)
+        # Remove tags de altura (\H...;)
+        txt = re.sub(r'\\H[^;]+;', '', txt)
+        # Remove tags de cor (\C...;)
+        txt = re.sub(r'\\C[^;]+;', '', txt)
+        # Remove non-breaking spaces (\~)
+        txt = txt.replace(r'\~', ' ')
+        # Remove chaves de agrupamento desnecessárias
+        txt = re.sub(r'[{}]', '', txt)
+        return txt.strip()
+
+    # Normalizar entidades da seção ENTITIES
     fixed_entities = []
     for t, ent in entities_list:
+        lay = None
+        for gk, gv in ent:
+            if gk == '8':
+                lay = gv
+                break
+
         if t == 'HATCH':
+            fixed_entities.append((t, fix_hatch_entity(ent, lay)))
+
+        elif t == 'MTEXT':
             new_ent = []
-            j = 0
-            while j < len(ent):
-                gk, gv = ent[j]
-                new_ent.append((gk, gv))
-                if gk == '20' and j > 0 and ent[j-1][0] == '10' and ent[j-1][1] == '0.0':
-                    new_ent.append(('30', '0.0'))
-                elif gk == '220':
-                    new_ent.append(('230', '1.0'))
-                j += 1
+            for gk, gv in ent:
+                if gk == '1':
+                    new_ent.append((gk, clean_mtext_content(gv)))
+                else:
+                    new_ent.append((gk, gv))
             fixed_entities.append((t, new_ent))
+
+        elif t == 'LWPOLYLINE' and lay in ['Curva_Nivel_Mestra', 'Curva_Nivel_Intermediaria']:
+            new_ent = []
+            has_440 = any(gk == '440' for gk, gv in ent)
+            for gk, gv in ent:
+                new_ent.append((gk, gv))
+                if gk == '100' and gv == 'AcDbEntity' and not has_440:
+                    new_ent.append(('440', ' 33554508')) # 70% transparência
+                    has_440 = True
+            fixed_entities.append((t, new_ent))
+
         else:
             fixed_entities.append((t, ent))
 
@@ -257,14 +333,14 @@ def run_pipeline(
 
     fixed_entities.sort(key=sort_key)
 
-    final_pairs = list(header_tables_blocks)
+    final_pairs = list(fixed_header_blocks)
     for t, ent in fixed_entities:
         final_pairs.extend(ent)
     final_pairs.extend(objects_trailer)
 
     out_lines = []
     for k, v in final_pairs:
-        out_lines.append(k)
+        out_lines.append(f'{k:>2}' if len(k) < 3 else k)
         out_lines.append(v)
 
     with open(output_dxf_path, 'w', encoding='cp1252', errors='replace') as f:
