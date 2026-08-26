@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import math
 import json
 import subprocess
 import xml.etree.ElementTree as ET
@@ -8,7 +9,7 @@ import ezdxf
 
 QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_process"
 
-# Configuração de Layers com Cores ACI exatas conforme SICOOB-Final.dwg
+# Tabela de Layers e Cores ACI
 LAYER_CONFIG = {
     '0': {'aci': 7, 'lw': -3},
     'Rede_Lote': {'aci': 72, 'lw': 20},
@@ -28,7 +29,6 @@ LAYER_CONFIG = {
     'Rede_DN300': {'aci': 5, 'lw': 60},
 }
 
-# Alturas padronizadas de texto em metros (proporção limpa de engenharia para escala 1:800)
 TEXT_HEIGHTS = {
     'Texto_Lote': 1.60,
     'Rede_Lote': 1.60,
@@ -173,12 +173,12 @@ def run_pipeline(
             l.dxf.color = cfg["aci"]
             l.dxf.lineweight = cfg["lw"]
 
-    # Definir fonte nativa universal
+    # Fonte TrueType nativa e universal para evitar falhas do motor SHX in-place
     std_style = doc.styles.get("STANDARD")
     if std_style:
-        std_style.dxf.font = "txt.shx"
+        std_style.dxf.font = "Arial.ttf"
 
-    # Sanitizar blocos auxiliares (Nos / símbolos de conexões)
+    # Sanitizar blocos auxiliares
     for b in doc.blocks:
         if b.name.startswith("symbolLayer"):
             for be in b:
@@ -188,11 +188,7 @@ def run_pipeline(
                 be.dxf.discard("lineweight")
 
     msp = doc.modelspace()
-    entities_to_keep = []
-    hatches = []
-    lines = []
-    inserts = []
-    texts = []
+    text_entities = []
 
     for e in list(msp):
         old_lay = e.dxf.layer
@@ -204,7 +200,7 @@ def run_pipeline(
         e.dxf.discard("true_color")
         e.dxf.discard("lineweight")
 
-        # Se for hachura de quadra (que cobre toda a extensão e gerava a mancha total), remover
+        # Excluir hachura sobreposta de quadra
         if e.dxftype() == "HATCH" and new_lay == "Rede_Quadra":
             msp.delete_entity(e)
             continue
@@ -214,50 +210,54 @@ def run_pipeline(
             e.dxf.discard("const_width")
             if new_lay in ["Curva_Nivel_Mestra", "Curva_Nivel_Intermediaria"]:
                 e.transparency = 0.70
-            lines.append(e)
 
-        # Hachuras dos lotes e meio-fio
+        # Hachuras
         elif e.dxftype() == "HATCH":
             e.dxf.elevation = (0, 0, 0)
             e.dxf.extrusion = (0, 0, 1)
-            # ACI 95 (verde suave para Lote) e ACI 213 (para Meio Fio) conforme SICOOB-Final
             if new_lay == "Rede_Lote":
                 e.dxf.color = 95
                 e.transparency = 0.50
             elif new_lay == "Rede_Meio_Fio":
                 e.dxf.color = 213
                 e.transparency = 0.50
-            hatches.append(e)
 
-        # Blocos (Nós e Acessórios)
+        # Blocos (Nós)
         elif e.dxftype() == "INSERT":
             e.dxf.layer = "Nos"
-            inserts.append(e)
 
-        # Textos
-        elif e.dxftype() == "TEXT":
-            txt = e.dxf.text
-            try:
-                txt = txt.encode("cp1252").decode("utf-8")
-            except Exception:
-                pass
-            txt = txt.replace("Ø", "%%C").replace("ø", "%%c").replace("Ã˜", "%%C")
-            e.dxf.text = txt
+        # Coletar e converter TEXT para MTEXT robusto e editável
+        elif e.dxftype() in ["TEXT", "MTEXT"]:
+            text_entities.append(e)
 
-            if new_lay == "Rede_Lote":
-                new_lay = "Texto_Lote"
-                e.dxf.layer = "Texto_Lote"
+    # Converter todos os textos para MTEXT nativo com vetor de rotação canônico
+    for te in text_entities:
+        old_lay = te.dxf.layer
+        new_lay = "Texto_Lote" if old_lay in ["Rede_Lote", "Texto_Lote"] else clean_layer(old_lay)
+        raw_val = te.dxf.text if te.dxftype() == "TEXT" else te.text
+        pos = te.dxf.insert
+        rot_deg = getattr(te.dxf, 'rotation', 0.0) or 0.0
 
-            # Ajustar tamanho proporcional do texto
-            target_h = TEXT_HEIGHTS.get(new_lay, 1.60)
-            e.dxf.height = target_h
-            texts.append(e)
+        try:
+            raw_val = raw_val.encode("cp1252").decode("utf-8")
+        except Exception:
+            pass
+        raw_val = raw_val.replace("Ø", "%%C").replace("ø", "%%c").replace("Ã˜", "%%C")
 
-    # Reordenar entidades no ModelSpace (Draw Order: Hatch no fundo -> Linhas -> Nós -> Textos)
-    # No AutoCAD/DXF, a ordem física de escrita dita a sobreposição visual
-    # Limpar modelspace e reinserir ordenado
-    # Como ezdxf mantém a ordem do container, podemos reorganizar:
-    # (HATCH já fica antes das linhas e textos)
+        # Limpar do modelspace a entidade legada
+        msp.delete_entity(te)
+
+        # Criar MTEXT perfeitamente compatível com o editor in-place do AutoCAD Mac
+        target_h = TEXT_HEIGHTS.get(new_lay, 1.60)
+        mtext = msp.add_mtext(raw_val, dxfattribs={
+            'layer': new_lay,
+            'char_height': target_h,
+            'style': 'STANDARD',
+            'attachment_point': 5, # Middle Center (alinhamento ideal para edição)
+        })
+        mtext.dxf.insert = pos
+        if rot_deg != 0.0:
+            mtext.dxf.rotation = rot_deg
 
     doc.saveas(output_dxf_path)
 
