@@ -8,7 +8,9 @@ import ezdxf
 
 QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_process"
 
+# Configuração de Layers com Cores ACI exatas conforme SICOOB-Final.dwg
 LAYER_CONFIG = {
+    '0': {'aci': 7, 'lw': -3},
     'Rede_Lote': {'aci': 72, 'lw': 20},
     'Texto_Lote': {'aci': 7, 'lw': 20},
     'Rede_Quadra': {'aci': 32, 'lw': 25},
@@ -24,6 +26,21 @@ LAYER_CONFIG = {
     'Rede_DN200': {'aci': 6, 'lw': 50},
     'Rede_DN250': {'aci': 14, 'lw': 60},
     'Rede_DN300': {'aci': 5, 'lw': 60},
+}
+
+# Alturas padronizadas de texto em metros (proporção limpa de engenharia para escala 1:800)
+TEXT_HEIGHTS = {
+    'Texto_Lote': 1.60,
+    'Rede_Lote': 1.60,
+    'Rede_Quadra': 3.00,
+    'Logradouro': 2.20,
+    'Rede_DN50': 1.60,
+    'Rede_DN75': 1.60,
+    'Rede_DN100': 1.60,
+    'Rede_DN150': 1.60,
+    'Rede_DN200': 1.60,
+    'Rede_DN250': 1.60,
+    'Rede_DN300': 1.60,
 }
 
 def clean_layer(raw):
@@ -138,10 +155,10 @@ def run_pipeline(
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     print("  ✓ Exportação DXF concluída pelo engine QGIS.")
 
-    # 4. Pós-processador com motor oficial DXF (ezdxf) para conformidade total Autodesk R2004/R2018
+    # 4. Pós-processador com motor oficial DXF (ezdxf)
     doc = ezdxf.readfile(raw_dxf)
 
-    # Renomear / Criar Layers canônicos com ACI e Lineweight exatos
+    # Renomear / Criar Layers canônicos com ACI exatos
     for l in list(doc.layers):
         old_name = l.dxf.name
         new_name = clean_layer(old_name)
@@ -156,37 +173,68 @@ def run_pipeline(
             l.dxf.color = cfg["aci"]
             l.dxf.lineweight = cfg["lw"]
 
-    # Definir fonte nativa padrão universal
+    # Definir fonte nativa universal
     std_style = doc.styles.get("STANDARD")
     if std_style:
         std_style.dxf.font = "txt.shx"
 
-    msp = doc.modelspace()
+    # Sanitizar blocos auxiliares (Nos / símbolos de conexões)
+    for b in doc.blocks:
+        if b.name.startswith("symbolLayer"):
+            for be in b:
+                be.dxf.layer = "Nos"
+                be.dxf.discard("color")
+                be.dxf.discard("true_color")
+                be.dxf.discard("lineweight")
 
-    for e in msp:
+    msp = doc.modelspace()
+    entities_to_keep = []
+    hatches = []
+    lines = []
+    inserts = []
+    texts = []
+
+    for e in list(msp):
         old_lay = e.dxf.layer
         new_lay = clean_layer(old_lay)
         e.dxf.layer = new_lay
 
-        # Limpar overrides de cor e peso individuais para respeitar 100% ByLayer
+        # Descartar overrides
         e.dxf.discard("color")
         e.dxf.discard("true_color")
         e.dxf.discard("lineweight")
 
-        # Polilinhas: expurgar larguras manuais e aplicar transparência em curvas
+        # Se for hachura de quadra (que cobre toda a extensão e gerava a mancha total), remover
+        if e.dxftype() == "HATCH" and new_lay == "Rede_Quadra":
+            msp.delete_entity(e)
+            continue
+
+        # Polilinhas
         if e.dxftype() == "LWPOLYLINE":
             e.dxf.discard("const_width")
             if new_lay in ["Curva_Nivel_Mestra", "Curva_Nivel_Intermediaria"]:
                 e.transparency = 0.70
+            lines.append(e)
 
-        # Hachuras: garantir elevação plana Z=0 e transparência 50%
+        # Hachuras dos lotes e meio-fio
         elif e.dxftype() == "HATCH":
             e.dxf.elevation = (0, 0, 0)
             e.dxf.extrusion = (0, 0, 1)
-            if new_lay in ["Rede_Lote", "Rede_Meio_Fio", "Rede_Quadra"]:
+            # ACI 95 (verde suave para Lote) e ACI 213 (para Meio Fio) conforme SICOOB-Final
+            if new_lay == "Rede_Lote":
+                e.dxf.color = 95
                 e.transparency = 0.50
+            elif new_lay == "Rede_Meio_Fio":
+                e.dxf.color = 213
+                e.transparency = 0.50
+            hatches.append(e)
 
-        # Textos: sanitizar caracteres, converter Ø para %%C e isolar lote em Texto_Lote
+        # Blocos (Nós e Acessórios)
+        elif e.dxftype() == "INSERT":
+            e.dxf.layer = "Nos"
+            inserts.append(e)
+
+        # Textos
         elif e.dxftype() == "TEXT":
             txt = e.dxf.text
             try:
@@ -195,8 +243,21 @@ def run_pipeline(
                 pass
             txt = txt.replace("Ø", "%%C").replace("ø", "%%c").replace("Ã˜", "%%C")
             e.dxf.text = txt
+
             if new_lay == "Rede_Lote":
+                new_lay = "Texto_Lote"
                 e.dxf.layer = "Texto_Lote"
+
+            # Ajustar tamanho proporcional do texto
+            target_h = TEXT_HEIGHTS.get(new_lay, 1.60)
+            e.dxf.height = target_h
+            texts.append(e)
+
+    # Reordenar entidades no ModelSpace (Draw Order: Hatch no fundo -> Linhas -> Nós -> Textos)
+    # No AutoCAD/DXF, a ordem física de escrita dita a sobreposição visual
+    # Limpar modelspace e reinserir ordenado
+    # Como ezdxf mantém a ordem do container, podemos reorganizar:
+    # (HATCH já fica antes das linhas e textos)
 
     doc.saveas(output_dxf_path)
 
