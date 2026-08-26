@@ -9,6 +9,7 @@ QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_proce
 
 LAYER_CONFIG = {
     'Rede_Lote': {'aci': 72, 'lw': 20},
+    'Texto_Lote': {'aci': 7, 'lw': 20},
     'Rede_Quadra': {'aci': 32, 'lw': 25},
     'Rede_Meio_Fio': {'aci': 221, 'lw': 25},
     'Logradouro': {'aci': 8, 'lw': 18},
@@ -175,6 +176,18 @@ def run_pipeline(
                     if i+1 < len(pairs) and pairs[i+1][0] == '2' and pairs[i+1][1] == 'LAYER':
                         in_layer_table = True
                 elif k == '0' and v == 'ENDTAB' and in_layer_table:
+                    # Injetar layer Texto_Lote na tabela de layers
+                    header_tables_blocks.extend([
+                        ('0', 'LAYER'),
+                        ('5', '999'),
+                        ('100', 'AcDbSymbolTableRecord'),
+                        ('100', 'AcDbLayerTableRecord'),
+                        ('2', 'Texto_Lote'),
+                        ('70', '0'),
+                        ('62', f"{LAYER_CONFIG['Texto_Lote']['aci']:>8}"),
+                        ('370', f"{LAYER_CONFIG['Texto_Lote']['lw']:>8}"),
+                        ('6', 'CONTINUOUS'),
+                    ])
                     in_layer_table = False
 
                 if in_layer_table:
@@ -278,23 +291,61 @@ def run_pipeline(
             fixed_header_blocks.append((k, v))
             i += 1
 
-    # Função para sanitizar e normalizar entidades TEXT nativas (Single-Line Text)
+    # Função para sanitizar e reconstruir entidades TEXT canônicas e perfeitas conforme Autodesk DXF
     def fix_text_entity(ent):
-        new_ent = []
+        handle = "0"
+        owner = "0"
+        layer = "0"
+        x, y, z = "0.0", "0.0", "0.0"
+        height = "3.5"
+        text_val = ""
+        rotation = "0.0"
+        style = "STANDARD"
+
         for gk, gv in ent:
-            if gk == '1':
-                txt = gv
-                # Limpar codificações residuais e caracteres mal formatados
-                try:
-                    txt = txt.encode('cp1252').decode('utf-8')
-                except Exception:
-                    pass
-                # Converter símbolo de diâmetro para o código nativo universal do AutoCAD (%%C)
-                txt = txt.replace('Ø', '%%C').replace('ø', '%%c').replace('Ã˜', '%%C')
-                new_ent.append((gk, txt))
-                continue
-            new_ent.append((gk, gv))
-        return new_ent
+            if gk == "5": handle = gv
+            elif gk == "330": owner = gv
+            elif gk == "8": layer = gv
+            elif gk == "10": x = gv
+            elif gk == "20": y = gv
+            elif gk == "30": z = gv
+            elif gk == "40": height = gv
+            elif gk == "1": text_val = gv
+            elif gk == "50": rotation = gv
+            elif gk == "7": style = gv
+
+        # Limpar codificações residuais e caracteres mal formatados
+        try:
+            text_val = text_val.encode('cp1252').decode('utf-8')
+        except Exception:
+            pass
+        # Converter símbolo de diâmetro para o código nativo universal do AutoCAD (%%C)
+        text_val = text_val.replace('Ø', '%%C').replace('ø', '%%c').replace('Ã˜', '%%C')
+
+        # Se for texto do lote, colocar no layer dedicado 'Texto_Lote'
+        if layer == 'Rede_Lote':
+            layer = 'Texto_Lote'
+
+        res = [
+            ("0", "TEXT"),
+            ("5", handle),
+        ]
+        if owner != "0":
+            res.append(("330", owner))
+        res.append(("100", "AcDbEntity"))
+        res.append(("8", layer))
+        res.append(("100", "AcDbText"))
+        res.append(("10", x))
+        res.append(("20", y))
+        res.append(("30", z))
+        res.append(("40", height))
+        res.append(("1", text_val))
+        if rotation != "0.0" and rotation != "0":
+            res.append(("50", rotation))
+        res.append(("7", style))
+        res.append(("100", "AcDbText"))
+
+        return res
 
     # Normalizar entidades da seção ENTITIES
     fixed_entities = []
