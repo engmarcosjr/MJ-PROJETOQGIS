@@ -118,7 +118,7 @@ def run_pipeline(
           {"layer": "v_edit_node_cb9a467c_5e78_4c1f_8c11_ea1081d05975", "attributeIndex": -1},
           {"layer": "logradouro_ba224c23_ea9a_461c_81ff_5f94045a5715", "attributeIndex": -1}
         ],
-        "MTEXT": True,
+        "MTEXT": False,
         "OUTPUT": raw_dxf,
         "SELECTED_FEATURES_ONLY": False,
         "SYMBOLOGY_MODE": 2,
@@ -213,8 +213,11 @@ def run_pipeline(
                 i += 1
                 continue
             else:
-                # Expurgo de overrides desnecessários
-                if k in ['420', '370', '40', '41', '43']:
+                # Expurgo de overrides desnecessários nas polilinhas e entidades gerais
+                if curr_type in ['LWPOLYLINE', 'POLYLINE', 'LINE'] and k in ['40', '41', '43']:
+                    i += 1
+                    continue
+                if k in ['420', '370']:
                     i += 1
                     continue
                 # Preservar ou ignorar cores diretas nas entidades comuns (mas ajustaremos nas hachuras)
@@ -275,38 +278,19 @@ def run_pipeline(
             fixed_header_blocks.append((k, v))
             i += 1
 
-    # Função para sanitizar textos MTEXT do QGIS e fixar altura (código 40)
-    def fix_mtext_entity(ent):
-        raw_txt = ""
-        for gk, gv in ent:
-            if gk == '1':
-                raw_txt = gv
-                break
-
-        # Extrair a altura real da simbologia da tag \H
-        h = 2.5
-        h_match = re.search(r'\\H([0-9.]+);', raw_txt)
-        if h_match:
-            h = float(h_match.group(1))
-
-        # Limpar todas as formatações inline
-        txt = re.sub(r'\\f[^;]+;', '', raw_txt)
-        txt = re.sub(r'\\H[^;]+;', '', txt)
-        txt = re.sub(r'\\C[^;]+;', '', txt)
-        txt = txt.replace(r'\~', ' ')
-        txt = re.sub(r'[{}]', '', txt).strip()
-
+    # Função para sanitizar e normalizar entidades TEXT nativas (Single-Line Text)
+    def fix_text_entity(ent):
         new_ent = []
-        has_30 = False
         for gk, gv in ent:
-            if gk == '20' and not has_30:
-                new_ent.append((gk, gv))
-                new_ent.append(('30', '0.0'))
-                has_30 = True
-                continue
             if gk == '1':
-                # Injetar a altura nominal do MTEXT no código de grupo 40
-                new_ent.append(('40', str(h)))
+                txt = gv
+                # Limpar codificações residuais e caracteres mal formatados
+                try:
+                    txt = txt.encode('cp1252').decode('utf-8')
+                except Exception:
+                    pass
+                # Converter símbolo de diâmetro para o código nativo universal do AutoCAD (%%C)
+                txt = txt.replace('Ø', '%%C').replace('ø', '%%c').replace('Ã˜', '%%C')
                 new_ent.append((gk, txt))
                 continue
             new_ent.append((gk, gv))
@@ -323,6 +307,9 @@ def run_pipeline(
 
         if t == 'HATCH':
             fixed_entities.append((t, fix_hatch_entity(ent, lay)))
+
+        elif t == 'TEXT':
+            fixed_entities.append((t, fix_text_entity(ent)))
 
         elif t == 'MTEXT':
             fixed_entities.append((t, fix_mtext_entity(ent)))
