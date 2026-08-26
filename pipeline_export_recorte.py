@@ -275,19 +275,42 @@ def run_pipeline(
             fixed_header_blocks.append((k, v))
             i += 1
 
-    # Função para sanitizar textos MTEXT do QGIS (remove tags RTF/inline que travam o In-Place Editor do AutoCAD)
-    def clean_mtext_content(raw_txt):
-        # Remove tags de fonte (\fFont Name|b0|i0;)
+    # Função para sanitizar textos MTEXT do QGIS e fixar altura (código 40)
+    def fix_mtext_entity(ent):
+        raw_txt = ""
+        for gk, gv in ent:
+            if gk == '1':
+                raw_txt = gv
+                break
+
+        # Extrair a altura real da simbologia da tag \H
+        h = 2.5
+        h_match = re.search(r'\\H([0-9.]+);', raw_txt)
+        if h_match:
+            h = float(h_match.group(1))
+
+        # Limpar todas as formatações inline
         txt = re.sub(r'\\f[^;]+;', '', raw_txt)
-        # Remove tags de altura (\H...;)
         txt = re.sub(r'\\H[^;]+;', '', txt)
-        # Remove tags de cor (\C...;)
         txt = re.sub(r'\\C[^;]+;', '', txt)
-        # Remove non-breaking spaces (\~)
         txt = txt.replace(r'\~', ' ')
-        # Remove chaves de agrupamento desnecessárias
-        txt = re.sub(r'[{}]', '', txt)
-        return txt.strip()
+        txt = re.sub(r'[{}]', '', txt).strip()
+
+        new_ent = []
+        has_30 = False
+        for gk, gv in ent:
+            if gk == '20' and not has_30:
+                new_ent.append((gk, gv))
+                new_ent.append(('30', '0.0'))
+                has_30 = True
+                continue
+            if gk == '1':
+                # Injetar a altura nominal do MTEXT no código de grupo 40
+                new_ent.append(('40', str(h)))
+                new_ent.append((gk, txt))
+                continue
+            new_ent.append((gk, gv))
+        return new_ent
 
     # Normalizar entidades da seção ENTITIES
     fixed_entities = []
@@ -302,13 +325,7 @@ def run_pipeline(
             fixed_entities.append((t, fix_hatch_entity(ent, lay)))
 
         elif t == 'MTEXT':
-            new_ent = []
-            for gk, gv in ent:
-                if gk == '1':
-                    new_ent.append((gk, clean_mtext_content(gv)))
-                else:
-                    new_ent.append((gk, gv))
-            fixed_entities.append((t, new_ent))
+            fixed_entities.append((t, fix_mtext_entity(ent)))
 
         elif t == 'LWPOLYLINE' and lay in ['Curva_Nivel_Mestra', 'Curva_Nivel_Intermediaria']:
             new_ent = []
