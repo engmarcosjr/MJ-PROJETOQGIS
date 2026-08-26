@@ -4,6 +4,7 @@ import re
 import json
 import subprocess
 import xml.etree.ElementTree as ET
+import ezdxf
 
 QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_process"
 
@@ -47,7 +48,7 @@ def run_pipeline(
     os.makedirs(temp_dir, exist_ok=True)
     print(f"=== INICIANDO PIPELINE DE EXPORTAÇÃO RECORTADA QGIS -> CAD ===")
     print(f"Extent: {extent_str}")
-    
+
     # 1. Clip das camadas vetoriais
     layers_to_clip = [
         ('3_quadra', '/Volumes/Mac_Dados/Urb-Anápolis/Urb_Aps_Final.gpkg|layername=3_quadra', True),
@@ -137,269 +138,67 @@ def run_pipeline(
     res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
     print("  ✓ Exportação DXF concluída pelo engine QGIS.")
 
-    # 4. Pós-processador para ByLayer, ACI Colors, Geometria HATCH e Expurgo de Overrides
-    with open(raw_dxf, 'r', encoding='cp1252', errors='replace') as f:
-        lines = f.read().splitlines()
+    # 4. Pós-processador com motor oficial DXF (ezdxf) para conformidade total Autodesk R2004/R2018
+    doc = ezdxf.readfile(raw_dxf)
 
-    pairs = []
-    for i in range(0, len(lines)-1, 2):
-        pairs.append((lines[i].strip(), lines[i+1].strip()))
+    # Renomear / Criar Layers canônicos com ACI e Lineweight exatos
+    for l in list(doc.layers):
+        old_name = l.dxf.name
+        new_name = clean_layer(old_name)
+        if new_name != old_name:
+            l.dxf.name = new_name
 
-    header_tables_blocks = []
-    entities_list = []
-    objects_trailer = []
-
-    mode = 'PRE_ENTITIES'
-    curr_ent = []
-    curr_type = None
-    in_layer_table = False
-    curr_layer_name = None
-
-    i = 0
-    while i < len(pairs):
-        k, v = pairs[i]
-
-        if mode == 'PRE_ENTITIES':
-            if k == '0' and v == 'SECTION' and i+1 < len(pairs) and pairs[i+1][0] == '2' and pairs[i+1][1] == 'ENTITIES':
-                mode = 'ENTITIES'
-                header_tables_blocks.append((k, v))
-                header_tables_blocks.append(pairs[i+1])
-                i += 2
-                continue
-            else:
-                # Adicionar $FILLMODE 1 no fim do HEADER se necessário
-                if k == '0' and v == 'ENDSEC' and len(header_tables_blocks) > 0 and header_tables_blocks[1] == ('2', 'HEADER'):
-                    header_tables_blocks.append(('9', '$FILLMODE'))
-                    header_tables_blocks.append(('70', '1'))
-
-                if k == '0' and v == 'TABLE':
-                    if i+1 < len(pairs) and pairs[i+1][0] == '2' and pairs[i+1][1] == 'LAYER':
-                        in_layer_table = True
-                elif k == '0' and v == 'ENDTAB' and in_layer_table:
-                    # Injetar layer Texto_Lote na tabela de layers
-                    header_tables_blocks.extend([
-                        ('0', 'LAYER'),
-                        ('5', '999'),
-                        ('100', 'AcDbSymbolTableRecord'),
-                        ('100', 'AcDbLayerTableRecord'),
-                        ('2', 'Texto_Lote'),
-                        ('70', '0'),
-                        ('62', f"{LAYER_CONFIG['Texto_Lote']['aci']:>8}"),
-                        ('370', f"{LAYER_CONFIG['Texto_Lote']['lw']:>8}"),
-                        ('6', 'CONTINUOUS'),
-                    ])
-                    in_layer_table = False
-
-                if in_layer_table:
-                    if k == '2' and v != 'LAYER':
-                        curr_layer_name = clean_layer(v)
-                        header_tables_blocks.append((k, curr_layer_name))
-                        i += 1
-                        continue
-                    if k == '62' and curr_layer_name in LAYER_CONFIG:
-                        header_tables_blocks.append((k, f"{LAYER_CONFIG[curr_layer_name]['aci']:>8}"))
-                        if 'truecolor' in LAYER_CONFIG[curr_layer_name]:
-                            header_tables_blocks.append(('420', f"{LAYER_CONFIG[curr_layer_name]['truecolor']:>8}"))
-                        if 'lw' in LAYER_CONFIG[curr_layer_name]:
-                            header_tables_blocks.append(('370', f"{LAYER_CONFIG[curr_layer_name]['lw']:>8}"))
-                        i += 1
-                        continue
-
-                header_tables_blocks.append((k, v))
-                i += 1
-                continue
-
-        elif mode == 'ENTITIES':
-            if k == '0' and v == 'ENDSEC':
-                if curr_ent:
-                    entities_list.append((curr_type, curr_ent))
-                    curr_ent = []
-                mode = 'POST_ENTITIES'
-                objects_trailer.append((k, v))
-                i += 1
-                continue
-            elif k == '0':
-                if curr_ent:
-                    entities_list.append((curr_type, curr_ent))
-                curr_type = v
-                curr_ent = [(k, v)]
-                i += 1
-                continue
-            else:
-                # Expurgo de overrides desnecessários nas polilinhas e entidades gerais
-                if curr_type in ['LWPOLYLINE', 'POLYLINE', 'LINE'] and k in ['40', '41', '43']:
-                    i += 1
-                    continue
-                if k in ['420', '370']:
-                    i += 1
-                    continue
-                # Preservar ou ignorar cores diretas nas entidades comuns (mas ajustaremos nas hachuras)
-                if k == '62':
-                    i += 1
-                    continue
-                if k == '8':
-                    curr_ent.append((k, clean_layer(v)))
-                    i += 1
-                    continue
-
-                curr_ent.append((k, v))
-                i += 1
-                continue
-
-        elif mode == 'POST_ENTITIES':
-            objects_trailer.append((k, v))
-            i += 1
-
-    # Normalizar entidades HATCH (Vetor normal Z 230: 1.0, elevação Z 30: 0.0) em BLOCKS e ENTITIES
-    def fix_hatch_entity(ent, lay=None):
-        new_ent = []
-        has_230 = any(gk == '230' for gk, gv in ent)
-        has_30 = any(gk == '30' for gk, gv in ent)
-        has_440 = any(gk == '440' for gk, gv in ent)
-
-        j = 0
-        while j < len(ent):
-            gk, gv = ent[j]
-            new_ent.append((gk, gv))
-            if gk == '20' and j > 0 and ent[j-1][0] == '10' and ent[j-1][1] == '0.0' and not has_30:
-                new_ent.append(('30', '0.0'))
-                has_30 = True
-            elif gk == '220' and not has_230:
-                new_ent.append(('230', '1.0'))
-                has_230 = True
-            elif gk == '100' and gv == 'AcDbEntity' and not has_440:
-                # Inserir transparência 50% no bloco AcDbEntity
-                if lay in ['Rede_Lote', 'Rede_Meio_Fio', 'Rede_Quadra']:
-                    new_ent.append(('440', ' 33554559'))
-                    has_440 = True
-            j += 1
-        return new_ent
-
-    # Normalizar HATCH dentro de header_tables_blocks
-    fixed_header_blocks = []
-    i = 0
-    while i < len(header_tables_blocks):
-        k, v = header_tables_blocks[i]
-        if k == '0' and v == 'HATCH':
-            h_ent = [(k, v)]
-            i += 1
-            while i < len(header_tables_blocks) and header_tables_blocks[i][0] != '0':
-                h_ent.append(header_tables_blocks[i])
-                i += 1
-            fixed_header_blocks.extend(fix_hatch_entity(h_ent))
+    for name, cfg in LAYER_CONFIG.items():
+        if not doc.layers.has_entry(name):
+            doc.layers.new(name, dxfattribs={"color": cfg["aci"], "lineweight": cfg["lw"]})
         else:
-            fixed_header_blocks.append((k, v))
-            i += 1
+            l = doc.layers.get(name)
+            l.dxf.color = cfg["aci"]
+            l.dxf.lineweight = cfg["lw"]
 
-    # Função para sanitizar e reconstruir entidades TEXT canônicas e perfeitas conforme Autodesk DXF
-    def fix_text_entity(ent):
-        handle = "0"
-        owner = "0"
-        layer = "0"
-        x, y, z = "0.0", "0.0", "0.0"
-        height = "3.5"
-        text_val = ""
-        rotation = "0.0"
-        style = "STANDARD"
+    # Definir fonte nativa padrão universal
+    std_style = doc.styles.get("STANDARD")
+    if std_style:
+        std_style.dxf.font = "txt.shx"
 
-        for gk, gv in ent:
-            if gk == "5": handle = gv
-            elif gk == "330": owner = gv
-            elif gk == "8": layer = gv
-            elif gk == "10": x = gv
-            elif gk == "20": y = gv
-            elif gk == "30": z = gv
-            elif gk == "40": height = gv
-            elif gk == "1": text_val = gv
-            elif gk == "50": rotation = gv
-            elif gk == "7": style = gv
+    msp = doc.modelspace()
 
-        # Limpar codificações residuais e caracteres mal formatados
-        try:
-            text_val = text_val.encode('cp1252').decode('utf-8')
-        except Exception:
-            pass
-        # Converter símbolo de diâmetro para o código nativo universal do AutoCAD (%%C)
-        text_val = text_val.replace('Ø', '%%C').replace('ø', '%%c').replace('Ã˜', '%%C')
+    for e in msp:
+        old_lay = e.dxf.layer
+        new_lay = clean_layer(old_lay)
+        e.dxf.layer = new_lay
 
-        # Se for texto do lote, colocar no layer dedicado 'Texto_Lote'
-        if layer == 'Rede_Lote':
-            layer = 'Texto_Lote'
+        # Limpar overrides de cor e peso individuais para respeitar 100% ByLayer
+        e.dxf.discard("color")
+        e.dxf.discard("true_color")
+        e.dxf.discard("lineweight")
 
-        res = [
-            ("0", "TEXT"),
-            ("5", handle),
-        ]
-        if owner != "0":
-            res.append(("330", owner))
-        res.append(("100", "AcDbEntity"))
-        res.append(("8", layer))
-        res.append(("100", "AcDbText"))
-        res.append(("10", x))
-        res.append(("20", y))
-        res.append(("30", z))
-        res.append(("40", height))
-        res.append(("1", text_val))
-        if rotation != "0.0" and rotation != "0":
-            res.append(("50", rotation))
-        res.append(("7", style))
-        res.append(("100", "AcDbText"))
+        # Polilinhas: expurgar larguras manuais e aplicar transparência em curvas
+        if e.dxftype() == "LWPOLYLINE":
+            e.dxf.discard("const_width")
+            if new_lay in ["Curva_Nivel_Mestra", "Curva_Nivel_Intermediaria"]:
+                e.transparency = 0.70
 
-        return res
+        # Hachuras: garantir elevação plana Z=0 e transparência 50%
+        elif e.dxftype() == "HATCH":
+            e.dxf.elevation = (0, 0, 0)
+            e.dxf.extrusion = (0, 0, 1)
+            if new_lay in ["Rede_Lote", "Rede_Meio_Fio", "Rede_Quadra"]:
+                e.transparency = 0.50
 
-    # Normalizar entidades da seção ENTITIES
-    fixed_entities = []
-    for t, ent in entities_list:
-        lay = None
-        for gk, gv in ent:
-            if gk == '8':
-                lay = gv
-                break
+        # Textos: sanitizar caracteres, converter Ø para %%C e isolar lote em Texto_Lote
+        elif e.dxftype() == "TEXT":
+            txt = e.dxf.text
+            try:
+                txt = txt.encode("cp1252").decode("utf-8")
+            except Exception:
+                pass
+            txt = txt.replace("Ø", "%%C").replace("ø", "%%c").replace("Ã˜", "%%C")
+            e.dxf.text = txt
+            if new_lay == "Rede_Lote":
+                e.dxf.layer = "Texto_Lote"
 
-        if t == 'HATCH':
-            fixed_entities.append((t, fix_hatch_entity(ent, lay)))
-
-        elif t == 'TEXT':
-            fixed_entities.append((t, fix_text_entity(ent)))
-
-        elif t == 'MTEXT':
-            fixed_entities.append((t, fix_mtext_entity(ent)))
-
-        elif t == 'LWPOLYLINE' and lay in ['Curva_Nivel_Mestra', 'Curva_Nivel_Intermediaria']:
-            new_ent = []
-            has_440 = any(gk == '440' for gk, gv in ent)
-            for gk, gv in ent:
-                new_ent.append((gk, gv))
-                if gk == '100' and gv == 'AcDbEntity' and not has_440:
-                    new_ent.append(('440', ' 33554508')) # 70% transparência
-                    has_440 = True
-            fixed_entities.append((t, new_ent))
-
-        else:
-            fixed_entities.append((t, ent))
-
-    # Ordenação de desenho (Draw Order): HATCH no fundo, depois LWPOLYLINE, INSERT e TEXT
-    def sort_key(item):
-        t, ent = item
-        if t == 'HATCH': return 0
-        if t == 'LWPOLYLINE': return 1
-        if t == 'INSERT': return 2
-        return 3
-
-    fixed_entities.sort(key=sort_key)
-
-    final_pairs = list(fixed_header_blocks)
-    for t, ent in fixed_entities:
-        final_pairs.extend(ent)
-    final_pairs.extend(objects_trailer)
-
-    out_lines = []
-    for k, v in final_pairs:
-        out_lines.append(f'{k:>2}' if len(k) < 3 else k)
-        out_lines.append(v)
-
-    with open(output_dxf_path, 'w', encoding='cp1252', errors='replace') as f:
-        f.write('\n'.join(out_lines) + '\n')
+    doc.saveas(output_dxf_path)
 
     print(f"\n✅ SUCESSO! DXF 100% Compatível e Recortado salvo em:")
     print(f"👉 {output_dxf_path}")
