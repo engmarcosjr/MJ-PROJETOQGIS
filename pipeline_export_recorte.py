@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 import ezdxf
 
 QGIS_PROCESS_BIN = "/Applications/QGIS-final-4_2_0.app/Contents/MacOS/qgis_process"
+ODA_FILE_CONVERTER_BIN = "/Applications/ODAFileConverter.app/Contents/MacOS/ODAFileConverter"
 
 # Tabela de Layers e Cores ACI
 LAYER_CONFIG = {
@@ -158,25 +159,52 @@ def run_pipeline(
     # 4. Pós-processador com motor oficial DXF (ezdxf)
     doc = ezdxf.readfile(raw_dxf)
 
-    # Renomear / Criar Layers canônicos com ACI exatos
-    for l in list(doc.layers):
-        old_name = l.dxf.name
-        new_name = clean_layer(old_name)
-        if new_name != old_name:
-            l.dxf.name = new_name
+    # Alinhar a versão do DXF com o gabarito que não trava no AutoCAD Mac
+    # (QGIS exporta em AC1018/AutoCAD 2004; o editor MTEXT in-place do
+    # AutoCAD Mac espera a estrutura mais recente do formato).
+    doc.dxfversion = "AC1032"  # AutoCAD 2018 (R2018)
+
+    # Criar Layers canônicos com ACI exatos.
+    # IMPORTANTE: NÃO renomear as layers originais do QGIS via
+    # `l.dxf.name = novo_nome` — isso só altera o atributo do objeto, mas
+    # não atualiza o índice interno (nome -> entrada) da tabela LAYER do
+    # ezdxf. A entrada antiga continua "indexada" pelo nome velho, então o
+    # `has_entry(novo_nome)` do laço seguinte retorna False e uma SEGUNDA
+    # layer com o mesmo nome (porém com a cor certa) acaba sendo criada —
+    # resultando em DUAS entradas LAYER com o nome duplicado no arquivo.
+    # O ODA File Converter expôs isso: "Duplicate record name ... Ignored".
+    # Uma tabela de camadas com nomes duplicados é estrutura DXF ambígua:
+    # as entidades acabam resolvendo ora para uma, ora para outra cópia —
+    # o que explica tanto as cores erradas (a cópia "fantasma" mantém a
+    # cor padrão vermelha do QGIS) quanto contribui para a instabilidade
+    # do arquivo no AutoCAD. A correção é criar as layers canônicas do
+    # zero (exceto a "0", que é especial e sempre existe) e nunca renomear
+    # as originais — as entidades já são todas realocadas para o nome
+    # canônico via `e.dxf.layer = new_lay` mais abaixo, então as layers
+    # originais do QGIS ficam órfãs e são removidas ao final.
+    original_layer_names = {l.dxf.name for l in doc.layers}
 
     for name, cfg in LAYER_CONFIG.items():
-        if not doc.layers.has_entry(name):
+        if name == "0":
+            l = doc.layers.get("0")
+            l.dxf.color = cfg["aci"]
+            l.dxf.lineweight = cfg["lw"]
+        elif not doc.layers.has_entry(name):
             doc.layers.new(name, dxfattribs={"color": cfg["aci"], "lineweight": cfg["lw"]})
         else:
             l = doc.layers.get(name)
             l.dxf.color = cfg["aci"]
             l.dxf.lineweight = cfg["lw"]
 
-    # Fonte TrueType nativa e universal para evitar falhas do motor SHX in-place
-    std_style = doc.styles.get("STANDARD")
-    if std_style:
-        std_style.dxf.font = "Arial.ttf"
+    # Fonte TrueType dos MTEXT: NÃO usar uma STYLE table dedicada (nem
+    # sobrescrever STANDARD). O gabarito funcional (SICOOB-Final.dxf) nunca
+    # cria um estilo próprio para as fontes TrueType que usa — em todas as
+    # 70 entidades MTEXT ele mantém STANDARD intocado (romans.shx, sem
+    # atributo 'style' no MTEXT) e troca a fonte por entidade através do
+    # código de formatação inline \f do próprio MTEXT, exatamente como o
+    # AutoCAD grava quando você escolhe uma fonte no editor. Reproduzimos a
+    # mesma técnica abaixo.
+    MTEXT_FONT = "Arial"
 
     # Sanitizar blocos auxiliares
     for b in doc.blocks:
@@ -244,25 +272,82 @@ def run_pipeline(
             pass
         raw_val = raw_val.replace("Ø", "%%C").replace("ø", "%%c").replace("Ã˜", "%%C")
 
+        # Espaço não separável (\~), igual ao gabarito, evita quebra de
+        # linha indevida dentro do MTEXT.
+        mtext_content = f"\\f{MTEXT_FONT}|i0|b0;" + raw_val.replace(" ", "\\~")
+
         # Limpar do modelspace a entidade legada
         msp.delete_entity(te)
 
-        # Criar MTEXT perfeitamente compatível com o editor in-place do AutoCAD Mac
+        # Criar MTEXT com a mesma estrutura de grupos DXF do gabarito que não
+        # trava (SICOOB-Final.dxf): todos os seus 70 MTEXT trazem width,
+        # defined_height, flow_direction e line_spacing explícitos, usam o
+        # vetor text_direction em vez do ângulo de rotação (50), NUNCA
+        # referenciam uma STYLE dedicada (ficam em STANDARD) e trocam a
+        # fonte via código inline \f dentro do próprio texto.
         target_h = TEXT_HEIGHTS.get(new_lay, 1.60)
-        mtext = msp.add_mtext(raw_val, dxfattribs={
+        mtext = msp.add_mtext(mtext_content, dxfattribs={
             'layer': new_lay,
             'char_height': target_h,
-            'style': 'STANDARD',
             'attachment_point': 5, # Middle Center (alinhamento ideal para edição)
+            'width': 0.0,
+            'defined_height': 0.0,
+            'flow_direction': 5,       # ByStyle, igual ao gabarito
+            'line_spacing_style': 1,   # AtLeast, igual ao gabarito
+            'line_spacing_factor': 1.0,
         })
         mtext.dxf.insert = pos
         if rot_deg != 0.0:
-            mtext.dxf.rotation = rot_deg
+            rad = math.radians(rot_deg)
+            mtext.dxf.text_direction = (math.cos(rad), math.sin(rad), 0.0)
+
+    # Remover as layers originais do QGIS: todas as entidades já foram
+    # realocadas para os nomes canônicos acima, então essas entradas ficam
+    # órfãs. Removê-las evita nomes duplicados na tabela LAYER (ver nota
+    # acima) e limpa o arquivo de lixo do processo de exportação do QGIS.
+    canonical_names = set(LAYER_CONFIG.keys()) | {"Defpoints"}
+    for old_name in list(original_layer_names):
+        if old_name not in canonical_names and doc.layers.has_entry(old_name):
+            try:
+                doc.layers.remove(old_name)
+            except Exception as ex:
+                print(f"  ⚠️ Não foi possível remover layer órfã '{old_name}': {ex}")
 
     doc.saveas(output_dxf_path)
 
     print(f"\n✅ SUCESSO! DXF 100% Compatível e Recortado salvo em:")
     print(f"👉 {output_dxf_path}")
+
+    # 5. Converter para DWG nativo via ODA File Converter (motor oficial da
+    # Open Design Alliance, mesma base usada pelo AutoCAD). Um DXF, mesmo
+    # estruturalmente válido, ainda é reinterpretado pelo importador do
+    # AutoCAD ao ser aberto; um DWG nativo evita essa etapa de conversão e
+    # tende a eliminar problemas de edição in-place que só aparecem em
+    # arquivos de origem DXF.
+    if os.path.exists(ODA_FILE_CONVERTER_BIN):
+        oda_in = f'{temp_dir}/oda_in'
+        oda_out = f'{temp_dir}/oda_out'
+        os.makedirs(oda_in, exist_ok=True)
+        os.makedirs(oda_out, exist_ok=True)
+        import shutil
+        oda_input_dxf = f'{oda_in}/{os.path.basename(output_dxf_path)}'
+        shutil.copy(output_dxf_path, oda_input_dxf)
+
+        oda_cmd = [
+            ODA_FILE_CONVERTER_BIN,
+            oda_in, oda_out,
+            "ACAD2018", "DWG", "0", "1"
+        ]
+        subprocess.run(oda_cmd, capture_output=True, text=True)
+
+        output_dwg_path = os.path.splitext(output_dxf_path)[0] + ".dwg"
+        generated_dwg = f'{oda_out}/{os.path.splitext(os.path.basename(output_dxf_path))[0]}.dwg'
+        if os.path.exists(generated_dwg):
+            shutil.copy(generated_dwg, output_dwg_path)
+            print(f"\n✅ DWG nativo gerado via ODA File Converter:")
+            print(f"👉 {output_dwg_path}")
+        else:
+            print("\n⚠️ ODA File Converter não gerou o DWG esperado.")
 
 if __name__ == '__main__':
     run_pipeline(
