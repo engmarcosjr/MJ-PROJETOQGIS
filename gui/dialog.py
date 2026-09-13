@@ -196,7 +196,8 @@ class DxfExportDialog(QDialog):
             self.tbl_layers.insertRow(row)
 
             item_name = QTableWidgetItem(name)
-            item_name.setFlags(item_name.flags() & ~Qt.ItemIsEditable)
+            item_is_editable = getattr(getattr(Qt, 'ItemFlag', None), 'ItemIsEditable', getattr(Qt, 'ItemIsEditable', 0))
+            item_name.setFlags(item_name.flags() & ~item_is_editable)
             self.tbl_layers.setItem(row, 0, item_name)
 
             item_aci = QTableWidgetItem(str(cfg.get('aci', 7)))

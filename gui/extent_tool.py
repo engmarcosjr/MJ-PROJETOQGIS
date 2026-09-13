@@ -7,6 +7,11 @@ from qgis.core import QgsRectangle, QgsPointXY, QgsWkbTypes
 from qgis.gui import QgsMapTool, QgsRubberBand
 
 
+# Obter identificadores de botão e tecla compatíveis com Qt5 e Qt6
+LEFT_BUTTON = getattr(getattr(Qt, 'MouseButton', None), 'LeftButton', getattr(Qt, 'LeftButton', None))
+KEY_ESCAPE = getattr(getattr(Qt, 'Key', None), 'Key_Escape', getattr(Qt, 'Key_Escape', None))
+
+
 class MapToolDrawExtent(QgsMapTool):
     """Permite ao usuário clicar e arrastar no mapa para definir a Bounding Box de recorte."""
 
@@ -19,10 +24,16 @@ class MapToolDrawExtent(QgsMapTool):
         self.start_point = None
         self.end_point = None
         self.is_drawing = False
-        self.setCursor(QCursor(Qt.CrossCursor))
+        try:
+            # Compatibilidade Qt5 / Qt6
+            cursor_shape = getattr(getattr(Qt, 'CursorShape', None), 'CrossCursor', getattr(Qt, 'CrossCursor', None))
+            if cursor_shape is not None:
+                self.setCursor(QCursor(cursor_shape))
+        except Exception:
+            pass
 
     def canvasPressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == LEFT_BUTTON:
             self.start_point = self.toMapCoordinates(event.pos())
             self.end_point = self.start_point
             self.is_drawing = True
@@ -42,7 +53,7 @@ class MapToolDrawExtent(QgsMapTool):
             self._update_rubber_band()
 
     def canvasReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self.is_drawing:
+        if event.button() == LEFT_BUTTON and self.is_drawing:
             self.end_point = self.toMapCoordinates(event.pos())
             self.is_drawing = False
 
@@ -59,7 +70,7 @@ class MapToolDrawExtent(QgsMapTool):
             self.reset()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key_Escape:
+        if event.key() == KEY_ESCAPE:
             self.reset()
 
     def _update_rubber_band(self):
