@@ -374,10 +374,17 @@ class DxfExportDialog(QDialog):
             QMessageBox.warning(self, "Aviso", "A escala digitada é inválida.")
             return
 
-        output_dxf = self.txt_out_path.text().strip()
+        # Abrir janela para escolher onde salvar o arquivo DXF
+        default_name = self.txt_out_path.text().strip() or os.path.expanduser("~/Downloads/projeto_exportado.dxf")
+        output_dxf, _ = QFileDialog.getSaveFileName(
+            self, "Salvar DXF de Saída", default_name, "Arquivo AutoCAD DXF (*.dxf)"
+        )
         if not output_dxf:
-            QMessageBox.warning(self, "Aviso", "Selecione o caminho do arquivo DXF de saída.")
-            return
+            return  # Usuário cancelou
+
+        if not output_dxf.lower().endswith(".dxf"):
+            output_dxf += ".dxf"
+        self.txt_out_path.setText(output_dxf)
 
         crs = self.canvas.mapSettings().destinationCrs()
         generate_dwg = self.chk_generate_dwg.isChecked()

@@ -222,7 +222,7 @@ def post_process_dxf(
             except Exception:
                 pass
 
-    # Inserir imagem de satélite georreferenciada no ModelSpace
+    # Inserir imagem de satélite georreferenciada no ModelSpace (ordenada no fundo / Send to Back)
     if raster_info:
         try:
             image_name = raster_info['image_name']
@@ -231,14 +231,28 @@ def post_process_dxf(
             ins_pt = raster_info['insert_point']
 
             image_def = doc.add_image_def(filename=image_name, size_in_pixel=(w_px, h_px))
-            msp.add_image(
+            img_entity = msp.add_image(
                 image_def=image_def,
                 insert=ins_pt,
                 size_in_units=(w_m, h_m),
                 dxfattribs={'layer': 'Imagem_Satelite'}
             )
+
+            # DRAWORDER (Send to Back):
+            # 1. Move fisicamente a imagem para a primeiríssima posição da lista de entidades
+            # 2. Configura a tabela SORTENTSTABLE para que o AutoCAD e Civil 3D desenhem a foto primeiro
+            if hasattr(msp, 'entity_space') and hasattr(msp.entity_space, 'entities'):
+                ents = msp.entity_space.entities
+                if img_entity in ents:
+                    ents.remove(img_entity)
+                    ents.insert(0, img_entity)
+
+            sortents = msp.get_sortents_table(create=True)
+            draw_order_handles = [(e.dxf.handle, f'{idx:08X}') for idx, e in enumerate(msp)]
+            sortents.set_handles(draw_order_handles)
+
         except Exception as ex:
-            print(f"  ⚠️ Aviso ao inserir imagem raster no DXF: {ex}")
+            print(f"  ⚠️ Aviso ao inserir/ordenar imagem raster no DXF: {ex}")
 
     if progress_callback:
         progress_callback(85, "Gravando DXF final...")
