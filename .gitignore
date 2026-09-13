@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# macOS
+.DS_Store
+
+# Saidas do pipeline (artefatos gerados)
+*.dxf
+*.dwg
+*.gpkg
+qgis_temp_clipped/

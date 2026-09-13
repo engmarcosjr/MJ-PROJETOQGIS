@@ -52,7 +52,13 @@ def clean_layer(raw):
     if 'logradouro' in r: return 'Logradouro'
     if 'Mestra' in r: return 'Curva_Nivel_Mestra'
     if 'Intermediaria' in r: return 'Curva_Nivel_Intermediaria'
-    if 'N' in r and ('s' in r or 'os' in r or 'Nos' in r): return 'Nos'
+    # Nos da rede. A camada chega como "Nos", "Nós" ou com o acento
+    # corrompido pelo encoding cp1252 do export ("N?s", "NÃ³s"), e as vezes
+    # com o nome bruto da camada GRASS. A regra antiga era
+    # `'N' in r and ('s' in r or ...)`, que classificava como "Nos" qualquer
+    # nome contendo um N maiusculo e um s minusculo -- qualquer camada nova
+    # nao prevista acima cairia nessa armadilha silenciosamente.
+    if 'v_edit_node' in r or re.fullmatch(r'N.{0,3}s', r): return 'Nos'
     for dn in ['50', '75', '100', '150', '200', '250', '300']:
         if r == dn or r == f'Rede_DN{dn}': return f'Rede_DN{dn}'
     return r
@@ -89,10 +95,15 @@ def run_pipeline(
             f'--OUTPUT={out_gpkg}'
         ]
         res = subprocess.run(cmd, capture_output=True, text=True)
-        if res.returncode != 0:
-            print(f"Erro ao clippar {name}: {res.stderr}")
-        else:
-            print(f"  ✓ Camada clippada: {name}")
+        # Abortar aqui e essencial: seguir adiante faria o projeto temporario
+        # apontar para um .gpkg inexistente e o DXF sairia com a camada vazia,
+        # sem nenhum aviso no arquivo final.
+        if res.returncode != 0 or not os.path.exists(out_gpkg):
+            raise RuntimeError(
+                f"Falha ao clippar a camada '{name}' (codigo {res.returncode}).\n"
+                f"{res.stderr.strip()}"
+            )
+        print(f"  ✓ Camada clippada: {name}")
 
     # 2. Criar projeto temporário com datasources apontando para as camadas clippadas
     temp_qgs = f'{temp_dir}/clipped_project.qgs'
@@ -152,8 +163,22 @@ def run_pipeline(
     with open(config_json_path, 'w') as f:
         json.dump(export_config, f)
 
-    cmd = f"{QGIS_PROCESS_BIN} run native:dxfexport - < {config_json_path}"
-    res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    # Sem shell=True: o `qgis_process` le a configuracao da stdin, e passar o
+    # redirecionamento pelo shell quebrava sempre que algum caminho continha
+    # espaco (o proprio projeto de origem mora em ".../QGIS_AGUA_OFF - Copia").
+    with open(config_json_path, 'r') as cfg_stdin:
+        res = subprocess.run(
+            [QGIS_PROCESS_BIN, 'run', 'native:dxfexport', '-'],
+            stdin=cfg_stdin, capture_output=True, text=True
+        )
+    # O retorno era descartado e o sucesso impresso incondicionalmente: uma
+    # falha do engine so aparecia adiante, como um erro obscuro do ezdxf ao
+    # tentar ler um arquivo que nunca foi escrito.
+    if res.returncode != 0 or not os.path.exists(raw_dxf):
+        raise RuntimeError(
+            f"Falha na exportação DXF do QGIS (codigo {res.returncode}).\n"
+            f"{res.stderr.strip()}"
+        )
     print("  ✓ Exportação DXF concluída pelo engine QGIS.")
 
     # 4. Pós-processador com motor oficial DXF (ezdxf)
