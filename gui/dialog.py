@@ -24,6 +24,12 @@ from ..core.scale_calc import paper_mm_to_model_m
 from ..core.dxf_processor import is_ezdxf_available
 from .extent_tool import MapToolDrawExtent
 
+# Compatibilidade Qt5 / Qt6 para QHeaderView e QMessageBox
+RESIZE_TO_CONTENTS = getattr(getattr(QHeaderView, 'ResizeMode', None), 'ResizeToContents', getattr(QHeaderView, 'ResizeToContents', 3))
+HEADER_STRETCH = getattr(getattr(QHeaderView, 'ResizeMode', None), 'Stretch', getattr(QHeaderView, 'Stretch', 1))
+MB_YES = getattr(getattr(QMessageBox, 'StandardButton', None), 'Yes', getattr(QMessageBox, 'Yes', None))
+MB_NO = getattr(getattr(QMessageBox, 'StandardButton', None), 'No', getattr(QMessageBox, 'No', None))
+
 
 class DxfExportDialog(QDialog):
     """Janela principal do Exportador DXF/CAD Pro."""
@@ -172,8 +178,8 @@ class DxfExportDialog(QDialog):
         self.tbl_layers.setHorizontalHeaderLabels([
             "Camada CAD", "Cor ACI", "Pena (0.01 mm)", "Texto Papel (mm)", "Descrição"
         ])
-        self.tbl_layers.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.tbl_layers.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.tbl_layers.horizontalHeader().setSectionResizeMode(0, RESIZE_TO_CONTENTS)
+        self.tbl_layers.horizontalHeader().setSectionResizeMode(4, HEADER_STRETCH)
         layout.addWidget(self.tbl_layers)
 
         self._populate_layers_table()
@@ -249,9 +255,9 @@ class DxfExportDialog(QDialog):
     def _reset_to_defaults(self):
         reply = QMessageBox.question(
             self, "Confirmar", "Deseja restaurar as configurações de camadas para o padrão original?",
-            QMessageBox.Yes | QMessageBox.No
+            MB_YES | MB_NO
         )
-        if reply == QMessageBox.Yes:
+        if reply == MB_YES:
             self.layer_config = reset_layer_config()
             self._populate_layers_table()
             self._on_scale_changed(self.combo_scale.currentText())
