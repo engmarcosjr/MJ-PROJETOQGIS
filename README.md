@@ -1,14 +1,30 @@
-# MJ-PROJETOQGIS — Pipeline de Exportação QGIS para DXF/DWG (AutoCAD)
+# MJ-PROJETOQGIS — Extensão QGIS e Pipeline DXF/DWG Pro (AutoCAD)
 
-Pipeline automatizado para recorte e exportação georreferenciada de projetos de saneamento e cadastro técnico municipal do QGIS diretamente para o padrão Autodesk, gerando **DXF (AC1032 / AutoCAD 2018)** e **DWG nativo**.
-
-> ⚠️ **Status:** protótipo calibrado para um recorte específico (Anápolis, EPSG:31982, escala 1:800).
-> Caminhos de dados, IDs de camada do QGIS e binários estão fixos no código — veja *Limitações conhecidas*.
-> A evolução planejada é a absorção deste motor pelo **[MJ-SANECAD](../MJ-SANECAD)** como algoritmo do plugin QGIS.
+Extensão oficial e pipeline automatizado para o **QGIS (3.28+ e 4.x / Qt6)** para recorte e exportação georreferenciada de projetos de saneamento e cadastro técnico diretamente para o padrão Autodesk, gerando **DXF (AC1032 / AutoCAD 2018)** e **DWG nativo via ODA File Converter**.
 
 ---
 
-## 📌 Recursos e Conformidade Técnica
+## ⚡ Novidade: Plugin Nativo do QGIS (`Exportador DXF / CAD Pro`)
+
+Agora o projeto conta com uma extensão completa para a interface do QGIS com:
+1. **Captura Visual de Extensão:**
+   - Botão para capturar a extensão exata da tela visível no mapa (`Canvas Extent`).
+   - Ferramenta interativa de clique e arrasto para desenhar um retângulo de recorte no mapa (`RubberBand`).
+2. **Detecção Automática de Camadas Ativas:**
+   - Exporta automaticamente apenas as camadas vetoriais ligadas/visíveis no painel de camadas do QGIS.
+3. **Escalas Dinâmicas e Alturas de Texto Proporcionais:**
+   - Você escolhe a escala alvo da prancha (1:500, 1:800, 1:1000, 1:2000, etc.).
+   - A geometria mantém-se 1:1 e todas as alturas de texto em metros são recalculadas matematicamente a partir da altura técnica no papel (em mm).
+4. **Gerenciador de Cores (ACI) e Penas:**
+   - Aba visual para editar cores ACI, espessuras e alturas de texto, com salvamento persistente (`QgsSettings`) e botão de restaurar padrões.
+5. **Conversão Nativa para DWG:**
+   - Checkbox integrado que aciona o ODA File Converter e gera o arquivo `.dwg` lado a lado com o `.dxf`.
+6. **Execução em Segundo Plano (`QgsTask`):**
+   - Não congela a interface do QGIS e mostra o progresso passo a passo.
+
+---
+
+## 📌 Recursos e Conformidade Técnica AutoCAD
 
 1. **Recorte Geométrico Rigoroso (Vector Clipping):**
    `native:extractbyextent` com `--CLIP=true` em todas as camadas vetoriais (exceto os nós, recortados por extensão sem clip geométrico). Curvas de nível e perímetros de quadra/lote são cortados na fronteira da Bounding Box, sem linhas extrapolando o desenho.
@@ -37,7 +53,25 @@ Pipeline automatizado para recorte e exportação georreferenciada de projetos d
 
 ---
 
-## 🚀 Como Executar
+## 🚀 Como Usar no QGIS
+
+O plugin já está vinculado aos perfis do seu QGIS.
+
+1. Abra o QGIS.
+2. Acesse o menu **Complementos > Gerenciar e Instalar Complementos > Instalados**.
+3. Marque a caixa de seleção ao lado de **Exportador DXF/CAD Pro**.
+4. Um novo botão com o ícone CAD surgirá na barra de ferramentas e no menu **Exportador CAD > Exportar Recorte para DXF / CAD Pro**.
+5. Na janela aberta:
+   - Clique em **Capturar Extensão da Tela Visível** ou em **Desenhar Retângulo no Mapa**.
+   - Defina a **Escala Alvo** (ex: `800`).
+   - Escolha o arquivo de saída `.dxf` (e marque se deseja o `.dwg` simultâneo).
+   - Clique em **Exportar para DXF/DWG**.
+
+---
+
+## 💻 Execução via Script Standalone (Legado / Linha de Comando)
+
+Caso queira rodar o pipeline fora da interface do QGIS (batch/headless):
 
 ```bash
 pip3 install -r requirements.txt
