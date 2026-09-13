@@ -19,7 +19,7 @@ from ..config.settings import (
     get_oda_path, set_oda_path
 )
 from ..core.exporter import get_active_visible_vector_layers
-from ..core.export_task import DxfExportTask
+from ..core.export_task import GuiFeedback, execute_export
 from ..core.scale_calc import paper_mm_to_model_m
 from ..core.dxf_processor import is_ezdxf_available
 from .extent_tool import MapToolDrawExtent
@@ -356,29 +356,33 @@ class DxfExportDialog(QDialog):
         generate_dwg = self.chk_generate_dwg.isChecked()
         oda_path = get_oda_path()
 
-        # Iniciar QgsTask em segundo plano
+        # Execução síncrona com processEvents: nunca trava o QGIS nem dá deadlock
         self.btn_export.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
-        self.lbl_status.setText("Exportando em segundo plano...")
+        self.lbl_status.setText("Iniciando exportação...")
 
-        task = DxfExportTask(
-            description="Exportação DXF/CAD Pro",
-            layers=active_layers,
-            extent=self.custom_extent,
-            crs=crs,
-            scale_denom=scale_denom,
-            output_dxf_path=output_dxf,
-            layer_config=self.layer_config,
-            clip_geometries=self.chk_clip_geoms.isChecked(),
-            generate_dwg=generate_dwg,
-            oda_bin_path=oda_path,
-            on_success=self._on_export_success,
-            on_error=self._on_export_error
-        )
+        feedback = GuiFeedback(self.progress_bar, self.lbl_status)
 
-        task.progressChanged.connect(self.progress_bar.setValue)
-        QgsApplication.taskManager().addTask(task)
+        try:
+            success = execute_export(
+                layers=active_layers,
+                extent=self.custom_extent,
+                crs=crs,
+                scale_denom=scale_denom,
+                output_dxf_path=output_dxf,
+                layer_config=self.layer_config,
+                clip_geometries=self.chk_clip_geoms.isChecked(),
+                generate_dwg=generate_dwg,
+                oda_bin_path=oda_path,
+                feedback=feedback
+            )
+            if success:
+                self._on_export_success(output_dxf)
+            else:
+                self._on_export_error("A exportação foi cancelada ou não pôde ser concluída.")
+        except Exception as ex:
+            self._on_export_error(ex)
 
     def _on_export_success(self, out_path):
         self.btn_export.setEnabled(True)

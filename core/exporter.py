@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Motor de exportação e recorte do QGIS para DXF/DWG."""
+"""Motor de exportação e recorte do QGIS para DXF/DWG usando a API nativa QgsDxfExport."""
 
 import os
 import tempfile
@@ -9,8 +9,9 @@ from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsWkbTypes,
     QgsMapLayer,
-    QgsProcessingFeatureSourceDefinition,
+    QgsDxfExport,
 )
+from qgis.PyQt.QtCore import QFile
 import processing
 
 from .scale_calc import get_text_heights_for_scale
@@ -48,7 +49,7 @@ def run_export_pipeline(
     """Executa o pipeline completo:
 
     1. Recorte espacial das camadas ativas (geométrico para linhas/polígonos, seleção para pontos)
-    2. Exportação para DXF via QGIS native:dxfexport
+    2. Exportação para DXF via motor nativo C++ QgsDxfExport
     3. Pós-processamento canônico com ezdxf (ByLayer, MTEXT com alturas proporcionais, hachuras)
     4. Conversão para DWG via ODA (opcional)
     """
@@ -58,10 +59,8 @@ def run_export_pipeline(
     if extent is None or extent.isEmpty():
         raise ValueError("A extensão de recorte (Bounding Box) é inválida ou está vazia.")
 
-    extent_str = f"{extent.xMinimum()},{extent.xMaximum()},{extent.yMinimum()},{extent.yMaximum()} [{crs.authid()}]"
-
     with tempfile.TemporaryDirectory(prefix="qgis_dxf_pro_") as temp_dir:
-        clipped_layers_config = []
+        dxf_layers_to_export = []
         total_layers = len(layers)
 
         for idx, layer in enumerate(layers):
@@ -69,7 +68,7 @@ def run_export_pipeline(
                 return False
 
             geom_type = layer.geometryType()
-            # Nós e pontos não sofrem clip geométrico, apenas filtro por extensão
+            # Pontos não sofrem clip geométrico, apenas recorte por extensão
             do_clip = clip_geometries and (geom_type != QgsWkbTypes.PointGeometry)
 
             pct = int(10 + (idx / total_layers) * 40)
@@ -85,30 +84,28 @@ def run_export_pipeline(
                     'CLIP': do_clip,
                     'OUTPUT': 'TEMPORARY_OUTPUT'
                 }
-                res = processing.run("native:extractbyextent", params, feedback=feedback)
+                res = processing.run("native:extractbyextent", params)
                 temp_layer = res.get('OUTPUT')
 
                 if temp_layer and temp_layer.featureCount() > 0:
-                    # Checar se a camada tem campo de diâmetro (cat_dnom ou similar) para separação automática
-                    split_field = None
+                    # Manter o nome original da camada para o mapeador de layers reconhecer
+                    temp_layer.setName(layer.name())
+
+                    # Checar se a camada tem campo de diâmetro para separação automática em camadas
+                    split_idx = -1
                     for fname in ['cat_dnom', 'dnom', 'diametro', 'DN']:
-                        if fname in [f.name() for f in temp_layer.fields()]:
-                            split_field = fname
+                        idx_found = temp_layer.fields().indexFromName(fname)
+                        if idx_found != -1:
+                            split_idx = idx_found
                             break
 
-                    layer_spec = {
-                        'layer': temp_layer,
-                        'attributeFieldIndex': temp_layer.fields().indexFromName(split_field) if split_field else -1
-                    }
-                    clipped_layers_config.append(layer_spec)
-                elif temp_layer:
-                    # Se não tem feições no recorte, incluímos sem split se desejado ou ignoramos
-                    pass
+                    dxf_layer = QgsDxfExport.DxfLayer(temp_layer, split_idx)
+                    dxf_layers_to_export.append(dxf_layer)
             except Exception as ex:
                 if feedback:
                     feedback.reportError(f"Aviso ao recortar '{layer.name()}': {ex}")
 
-        if not clipped_layers_config:
+        if not dxf_layers_to_export:
             raise RuntimeError("Nenhuma entidade geométrica foi encontrada dentro da área de recorte especificada.")
 
         if feedback and feedback.isCanceled():
@@ -116,33 +113,37 @@ def run_export_pipeline(
 
         if feedback:
             feedback.setProgress(55)
-            feedback.setProgressText("Exportando camadas recortadas via DXF QGIS...")
+            feedback.setProgressText("Exportando camadas recortadas via QgsDxfExport...")
 
         raw_dxf = os.path.join(temp_dir, "raw_export.dxf")
 
-        dxf_params = {
-            'LAYERS': clipped_layers_config,
-            'SYMBOLOGY_MODE': 2,  # Symbol Layer Symbology para preservar hachuras e estilos
-            'SYMBOLOGY_SCALE': scale_denom,
-            'ENCODING': 18,       # cp1252
-            'CRS': crs,
-            'USE_LAYER_TITLE': False,
-            'FORCE_2D': False,
-            'MTEXT': True,
-            'OUTPUT': raw_dxf
-        }
+        # Configurar o exportador oficial C++ do QGIS
+        dxf_exporter = QgsDxfExport()
+        dxf_exporter.setExtent(extent)
+        dxf_exporter.setDestinationCrs(crs)
+        dxf_exporter.setSymbologyScale(scale_denom)
 
-        processing.run("native:dxfexport", dxf_params, feedback=feedback)
+        symb_mode = getattr(getattr(QgsDxfExport, 'SymbologyExport', None), 'SymbolLayerSymbology', 2)
+        dxf_exporter.setSymbologyExport(symb_mode)
+        dxf_exporter.addLayers(dxf_layers_to_export)
 
-        if not os.path.exists(raw_dxf):
-            raise RuntimeError("Falha ao gerar o arquivo DXF intermediário do QGIS.")
+        qfile = QFile(raw_dxf)
+        open_flags = getattr(getattr(QFile, 'OpenModeFlag', None), 'WriteOnly', getattr(QFile, 'WriteOnly', 2))
+        if not qfile.open(open_flags):
+            raise RuntimeError(f"Não foi possível abrir o arquivo intermediário: {raw_dxf}")
+
+        export_res = dxf_exporter.writeToFile(qfile, "cp1252")
+        qfile.close()
+
+        if not os.path.exists(raw_dxf) or os.path.getsize(raw_dxf) == 0:
+            raise RuntimeError(f"Falha na geração do DXF intermediário (código QGIS: {export_res}).")
 
         if feedback and feedback.isCanceled():
             return False
 
         if feedback:
             feedback.setProgress(70)
-            feedback.setProgressText("Calculando proporções e aplicando pós-processamento CAD...")
+            feedback.setProgressText("Formatando e aplicando pós-processamento CAD...")
 
         # 3. Calcular alturas de texto para a escala escolhida
         text_heights_in_m = get_text_heights_for_scale(layer_config, scale_denom)
