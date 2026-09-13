@@ -160,6 +160,33 @@ class DxfExportDialog(QDialog):
         self.chk_generate_dwg.setChecked(os.path.exists(get_oda_path()))
         dest_form.addRow("", self.chk_generate_dwg)
 
+        # Grupo: Georreferenciamento e Imagem de Satélite
+        gb_sat = QGroupBox("5. Georreferenciamento e Imagem de Fundo")
+        sat_form = QFormLayout(gb_sat)
+
+        self.chk_include_sat = QCheckBox("Capturar e embutir imagem do Google Satélite georreferenciada no DXF")
+        self.chk_include_sat.setChecked(True)
+        sat_form.addRow("", self.chk_include_sat)
+
+        h_sat_cfg = QHBoxLayout()
+        self.combo_sat_res = QComboBox()
+        self.combo_sat_res.addItem("Normal (1920 px)", 1920)
+        self.combo_sat_res.addItem("Alta Resolução (2560 px — Recomendado)", 2560)
+        self.combo_sat_res.addItem("Ultra para Pranchas Grandes (3840 px)", 3840)
+        self.combo_sat_res.setCurrentIndex(1)
+        h_sat_cfg.addWidget(self.combo_sat_res)
+        h_sat_cfg.addStretch()
+        sat_form.addRow("Resolução da Imagem:", h_sat_cfg)
+
+        lbl_sat_tip = QLabel(
+            "💡 A imagem é salva como .jpg com World File (.jgw) e inserida como entidade IMAGE\n"
+            "   no layer 'Imagem_Satelite', casando perfeitamente com os vetores no CAD."
+        )
+        lbl_sat_tip.setStyleSheet("color: #666; font-size: 11px;")
+        sat_form.addRow("", lbl_sat_tip)
+
+        layout.addWidget(gb_sat)
+
         layout.addWidget(gb_dest)
         layout.addStretch()
 
@@ -355,6 +382,8 @@ class DxfExportDialog(QDialog):
         crs = self.canvas.mapSettings().destinationCrs()
         generate_dwg = self.chk_generate_dwg.isChecked()
         oda_path = get_oda_path()
+        include_sat = self.chk_include_sat.isChecked()
+        sat_res = int(self.combo_sat_res.currentData() or 2560)
 
         # Execução síncrona com processEvents: nunca trava o QGIS nem dá deadlock
         self.btn_export.setEnabled(False)
@@ -375,6 +404,8 @@ class DxfExportDialog(QDialog):
                 clip_geometries=self.chk_clip_geoms.isChecked(),
                 generate_dwg=generate_dwg,
                 oda_bin_path=oda_path,
+                include_satellite=include_sat,
+                satellite_resolution=sat_res,
                 feedback=feedback
             )
             if success:
@@ -389,15 +420,21 @@ class DxfExportDialog(QDialog):
         self.progress_bar.setVisible(False)
         self.lbl_status.setText("✅ Exportado com sucesso!")
 
-        dwg_msg = ""
+        extra_msg = []
         dwg_path = os.path.splitext(out_path)[0] + ".dwg"
         if self.chk_generate_dwg.isChecked() and os.path.exists(dwg_path):
-            dwg_msg = f"\n\nArquivo DWG nativo gerado:\n👉 {dwg_path}"
+            extra_msg.append(f"📄 Arquivo DWG nativo:\n   {dwg_path}")
+
+        sat_path = os.path.splitext(out_path)[0] + "_satelite.jpg"
+        if self.chk_include_sat.isChecked() and os.path.exists(sat_path):
+            extra_msg.append(f"🛰️ Imagem de Satélite Georreferenciada (.jpg + .jgw):\n   {sat_path}")
+
+        extra_info = "\n\n" + "\n\n".join(extra_msg) if extra_msg else ""
 
         QMessageBox.information(
             self, "Sucesso",
             f"Projeto recortado e exportado com sucesso!\n\n"
-            f"Arquivo DXF gerado:\n👉 {out_path}{dwg_msg}"
+            f"📐 Arquivo DXF gerado:\n   {out_path}{extra_info}"
         )
 
     def _on_export_error(self, ex):

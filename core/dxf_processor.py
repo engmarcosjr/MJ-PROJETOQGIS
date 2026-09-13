@@ -77,9 +77,10 @@ def post_process_dxf(
     layer_config: dict,
     text_heights_in_m: dict,
     name_rules=None,
+    raster_info: dict = None,
     progress_callback=None
 ):
-    """Aplica higienização ByLayer, MTEXT nativo com Arial inline, cores ACI e padronização AC1032."""
+    """Aplica higienização ByLayer, MTEXT nativo com Arial inline, cores ACI, padronização AC1032 e imagem raster."""
     if not is_ezdxf_available():
         raise RuntimeError(
             "Biblioteca 'ezdxf' não encontrada no ambiente Python do QGIS.\n"
@@ -94,6 +95,11 @@ def post_process_dxf(
     doc.dxfversion = "AC1032"
 
     original_layer_names = {l.dxf.name for l in doc.layers}
+
+    # Criar camada dedicada para imagem de satélite se fornecida
+    if raster_info:
+        if not doc.layers.has_entry("Imagem_Satelite"):
+            doc.layers.new("Imagem_Satelite", dxfattribs={"color": 7, "lineweight": -3})
 
     # Criar camadas canônicas com as cores ACI e Lineweight configurados
     for name, cfg in layer_config.items():
@@ -208,13 +214,31 @@ def post_process_dxf(
             mtext.dxf.text_direction = (math.cos(rad), math.sin(rad), 0.0)
 
     # Remover layers órfãs para evitar duplicatas e conflitos no AutoCAD
-    canonical_names = set(layer_config.keys()) | {"Defpoints"}
+    canonical_names = set(layer_config.keys()) | {"Defpoints", "Imagem_Satelite"}
     for old_name in list(original_layer_names):
         if old_name not in canonical_names and doc.layers.has_entry(old_name):
             try:
                 doc.layers.remove(old_name)
             except Exception:
                 pass
+
+    # Inserir imagem de satélite georreferenciada no ModelSpace
+    if raster_info:
+        try:
+            image_name = raster_info['image_name']
+            w_px, h_px = raster_info['size_in_pixel']
+            w_m, h_m = raster_info['size_in_units']
+            ins_pt = raster_info['insert_point']
+
+            image_def = doc.add_image_def(filename=image_name, size_in_pixel=(w_px, h_px))
+            msp.add_image(
+                image_def=image_def,
+                insert=ins_pt,
+                size_in_units=(w_m, h_m),
+                dxfattribs={'layer': 'Imagem_Satelite'}
+            )
+        except Exception as ex:
+            print(f"  ⚠️ Aviso ao inserir imagem raster no DXF: {ex}")
 
     if progress_callback:
         progress_callback(85, "Gravando DXF final...")

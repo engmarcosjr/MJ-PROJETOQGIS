@@ -16,6 +16,7 @@ import processing
 
 from .scale_calc import get_text_heights_for_scale
 from .dxf_processor import post_process_dxf, convert_to_dwg_with_oda
+from .satellite_capture import capture_satellite_image
 
 
 def get_active_visible_vector_layers():
@@ -44,14 +45,17 @@ def run_export_pipeline(
     clip_geometries: bool = True,
     generate_dwg: bool = False,
     oda_bin_path: str = None,
+    include_satellite: bool = True,
+    satellite_resolution: int = 2560,
     feedback=None
 ):
     """Executa o pipeline completo:
 
     1. Recorte espacial das camadas ativas (geométrico para linhas/polígonos, seleção para pontos)
-    2. Exportação para DXF via motor nativo C++ QgsDxfExport
-    3. Pós-processamento canônico com ezdxf (ByLayer, MTEXT com alturas proporcionais, hachuras)
-    4. Conversão para DWG via ODA (opcional)
+    2. Captura e georreferenciamento de imagem ortorretificada (Google Satélite / Ortofoto)
+    3. Exportação para DXF via motor nativo C++ QgsDxfExport
+    4. Pós-processamento canônico com ezdxf (ByLayer, MTEXT proporcional, hachuras e imagem raster)
+    5. Conversão para DWG via ODA (opcional)
     """
     if not layers:
         raise ValueError("Nenhuma camada vetorial ativa selecionada para exportação.")
@@ -155,6 +159,28 @@ def run_export_pipeline(
             if not os.path.exists(raw_dxf) or os.path.getsize(raw_dxf) == 0:
                 raise RuntimeError(f"Falha na geração do DXF intermediário (código QGIS: {export_res}).")
 
+            # 2. Captura de Imagem de Satélite / Ortofoto (se requisitado)
+            raster_info = None
+            if include_satellite:
+                if feedback:
+                    feedback.setProgress(62)
+                    feedback.setProgressText("Capturando e georreferenciando imagem do Google Satélite...")
+
+                dxf_dir = os.path.dirname(os.path.abspath(output_dxf_path))
+                stem = os.path.splitext(os.path.basename(output_dxf_path))[0]
+                img_path = os.path.join(dxf_dir, f"{stem}_satelite.jpg")
+
+                try:
+                    raster_info = capture_satellite_image(
+                        extent=extent,
+                        crs=crs,
+                        output_image_path=img_path,
+                        target_width_px=satellite_resolution
+                    )
+                except Exception as ex:
+                    if feedback:
+                        feedback.reportError(f"Aviso ao capturar satélite: {ex}")
+
             if feedback and feedback.isCanceled():
                 return False
 
@@ -165,7 +191,7 @@ def run_export_pipeline(
             # 3. Calcular alturas de texto para a escala escolhida
             text_heights_in_m = get_text_heights_for_scale(layer_config, scale_denom)
 
-            # 4. Pós-processador ezdxf (ByLayer, MTEXT nativo, ACI, transparências)
+            # 4. Pós-processador ezdxf (ByLayer, MTEXT nativo, ACI, transparências e imagem raster)
             def dxf_progress(pct, msg):
                 if feedback:
                     feedback.setProgress(70 + int(pct * 0.20))
@@ -177,6 +203,7 @@ def run_export_pipeline(
                 layer_config=layer_config,
                 text_heights_in_m=text_heights_in_m,
                 name_rules=name_rules,
+                raster_info=raster_info,
                 progress_callback=dxf_progress
             )
 

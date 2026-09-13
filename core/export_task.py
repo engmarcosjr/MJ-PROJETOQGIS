@@ -47,6 +47,8 @@ def execute_export(
     clip_geometries: bool = True,
     generate_dwg: bool = False,
     oda_bin_path: str = None,
+    include_satellite: bool = True,
+    satellite_resolution: int = 2560,
     feedback=None
 ):
     """Executa o pipeline chamando as rotinas com feedback contínuo."""
@@ -61,5 +63,7 @@ def execute_export(
         clip_geometries=clip_geometries,
         generate_dwg=generate_dwg,
         oda_bin_path=oda_bin_path,
+        include_satellite=include_satellite,
+        satellite_resolution=satellite_resolution,
         feedback=feedback
     )
